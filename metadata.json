@@ -1,0 +1,6 @@
+{
+  "name": "NutriHijau — Pelacak Kalori & Penurunan Berat Badan",
+  "description": "Aplikasi pelacak kalori harian, hidrasi, berat badan, dan pelatih gizi AI yang dipersonalisasi dalam Bahasa Indonesia.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
