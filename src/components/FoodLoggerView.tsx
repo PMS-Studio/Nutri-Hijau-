@@ -255,7 +255,9 @@ export const FoodLoggerView: React.FC<FoodLoggerViewProps> = ({
             Pencatat Makanan & Estimasi AI
           </h1>
           <p className="text-sm text-[#64748B] dark:text-emerald-200/75">
-            Tulis menu makanan Anda dan tinjau struk estimasi gizinya sebelum disimpan.
+            Pencatatan untuk{" "}
+            <strong className="text-[#10B981] dark:text-[#34D399]">{profile.name}</strong> · Tulis
+            menu makanan dan tinjau struk estimasi gizinya sebelum disimpan.
           </p>
         </div>
 
@@ -776,11 +778,31 @@ export const FoodLoggerView: React.FC<FoodLoggerViewProps> = ({
                                 />
                               </div>
                             </div>
-                            <div className="flex justify-end">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const atwater = Math.round(
+                                    (Number(editCarbs) || 0) * 4 +
+                                      (Number(editProtein) || 0) * 4 +
+                                      (Number(editFat) || 0) * 9
+                                  );
+                                  if (atwater > 0) setEditCalories(String(atwater));
+                                }}
+                                className="text-[11px] font-medium text-[#10B981] dark:text-[#34D399] hover:underline text-left cursor-pointer"
+                              >
+                                Samakan kalori dengan makro Atwater (
+                                {Math.round(
+                                  (Number(editCarbs) || 0) * 4 +
+                                    (Number(editProtein) || 0) * 4 +
+                                    (Number(editFat) || 0) * 9
+                                )}{" "}
+                                kkal)
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => saveEdit(item.id)}
-                                className="h-9 px-4 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                                className="h-9 px-4 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer self-end"
                               >
                                 <Check className="w-3.5 h-3.5" />
                                 <span>Simpan Perubahan</span>

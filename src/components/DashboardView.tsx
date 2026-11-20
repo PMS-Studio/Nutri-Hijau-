@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -18,26 +18,32 @@ import {
   Sunrise,
   Trash2,
   Utensils,
+  Users,
   Wheat,
 } from "lucide-react";
 import type {
   AppTab,
+  ChatMessage,
   ExerciseLogEntry,
   FoodLogEntry,
   NutritionPlan,
   UserProfile,
+  WeeklyMealPlan,
   WeightLogEntry,
 } from "../types";
 import {
   ACTIVITY_OPTIONS,
   CATEGORY_MAP,
   EXERCISE_PRESETS,
+  FAMILY_ROLE_MAP,
+  NUTRITION_FOCUS_MAP,
   calculateDailyStreak,
   calculateExerciseCalories,
   formatDateIndo,
   getTimeOfDayGreeting,
   getTodayDateKey,
 } from "../utils/nutrition";
+import { DailyMenuChatbot } from "./DailyMenuChatbot";
 import { WeightTrendChart } from "./WeightTrendChart";
 
 interface DashboardViewProps {
@@ -47,6 +53,14 @@ interface DashboardViewProps {
   exerciseLogs: ExerciseLogEntry[];
   waterLogs: Record<string, number>;
   weightLogs: WeightLogEntry[];
+  familyMembers: UserProfile[];
+  weeklyPlan: WeeklyMealPlan | null;
+  consultMessages: ChatMessage[];
+  onAppendConsultMessages: (msgs: ChatMessage[]) => void;
+  onResetConsultChat: () => void;
+  onAddFood: (entry: Omit<FoodLogEntry, "id" | "createdAt">) => void;
+  onSelectMember: (memberId: string) => void;
+  onOpenFamilyManager: () => void;
   onAddWater: (deltaMl: number) => void;
   onLogWeight: (weightKg: number) => void;
   onAddExercise: (entry: Omit<ExerciseLogEntry, "id" | "createdAt">) => void;
@@ -61,6 +75,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   exerciseLogs,
   waterLogs,
   weightLogs,
+  familyMembers,
+  weeklyPlan,
+  consultMessages,
+  onAppendConsultMessages,
+  onResetConsultChat,
+  onAddFood,
+  onSelectMember,
+  onOpenFamilyManager,
   onAddWater,
   onLogWeight,
   onAddExercise,
@@ -131,6 +153,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const [weightInput, setWeightInput] = useState<string>(String(latestWeight));
   const [weightSavedFeedback, setWeightSavedFeedback] = useState<boolean>(false);
+
+  useEffect(() => {
+    setWeightInput(String(latestWeight));
+  }, [latestWeight]);
 
   const [showExerciseForm, setShowExerciseForm] = useState<boolean>(false);
   const [selectedMet, setSelectedMet] = useState<number>(EXERCISE_PRESETS[0].met);
@@ -242,7 +268,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-medium text-slate-600 dark:text-emerald-200/80">
               <span className="font-semibold text-emerald-700 dark:text-emerald-300">
-                Mode: {CATEGORY_MAP[profile.category].shortLabel}
+                {FAMILY_ROLE_MAP[profile.relationRole]?.label ?? "Anggota"} ·{" "}
+                {NUTRITION_FOCUS_MAP[profile.nutritionFocus]?.shortLabel ??
+                  CATEGORY_MAP[profile.category].shortLabel}
                 {profile.category === "postpartum" && profile.isBreastfeeding
                   ? " (Menyusui)"
                   : ""}
@@ -258,6 +286,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     : "Mulai Hari Pertama"}
                 </span>
               </span>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={() => onNavigateTab("profile")}
+                className="font-semibold text-[#10B981] dark:text-[#34D399] hover:underline cursor-pointer"
+              >
+                Ubah Profil
+              </button>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5]">
               {greeting}, {profile.name}
@@ -284,6 +320,43 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       </section>
+
+      {/* Quick Family Member Switcher Bar (Shown only when household has >1 member) */}
+      {familyMembers.length > 1 && (
+        <section className="flex flex-wrap items-center justify-between gap-3 px-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-[#64748B] dark:text-emerald-200/75 mr-1 inline-flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-[#10B981]" />
+              <span>Anggota:</span>
+            </span>
+            {familyMembers.map((member) => {
+              const active = member.id === profile.id;
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  onClick={() => onSelectMember(member.id)}
+                  className={`h-8 px-3 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                    active
+                      ? "bg-[#0F172A] dark:bg-[#10B981] text-white shadow-xs"
+                      : "bg-white dark:bg-[#0B1F17] border border-emerald-100 dark:border-emerald-900/60 text-[#475569] dark:text-emerald-200/80 hover:border-emerald-300"
+                  }`}
+                >
+                  {member.name}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={onOpenFamilyManager}
+            className="text-xs font-semibold text-[#10B981] dark:text-[#34D399] hover:underline flex items-center gap-1 cursor-pointer whitespace-nowrap"
+          >
+            <span>Kelola Keluarga di Profil</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </section>
+      )}
 
       {/* Safety Notice for Postpartum, Child/Teen, or Underweight */}
       {plan.safetyBannerTitle && (
@@ -860,6 +933,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </section>
       </div>
+
+      {/* Daily Menu Consultant Chatbot (Warteg & Restaurant Menu Adjustment) */}
+      <DailyMenuChatbot
+        profile={profile}
+        plan={plan}
+        todayFoods={todayFoods}
+        todaySummary={{
+          caloriesIn,
+          caloriesOut,
+          remainingCalories,
+          carbs: carbsIn,
+          protein: proteinIn,
+          fat: fatIn,
+          waterMl: todayWaterMl,
+        }}
+        weeklyPlan={weeklyPlan}
+        messages={consultMessages}
+        onAppendMessages={onAppendConsultMessages}
+        onResetChat={onResetConsultChat}
+        onLogMealToToday={onAddFood}
+      />
     </div>
   );
 };

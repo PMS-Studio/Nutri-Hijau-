@@ -1,14 +1,17 @@
 import type {
   ChatMessage,
   ExerciseLogEntry,
+  FamilyRelationRole,
+  FamilyStore,
   FoodLogEntry,
+  MemberNutritionData,
   UserProfile,
   WeeklyMealPlan,
   WeightLogEntry,
 } from "../types";
-import { getTodayDateKey } from "./nutrition";
+import { getTodayDateKey, inferDefaultNutritionFocus } from "./nutrition";
 
-const KEYS = {
+const LEGACY_KEYS = {
   PROFILE: "nutrihijau_profile_v1",
   FOOD_LOGS: "nutrihijau_food_logs_v1",
   EXERCISE_LOGS: "nutrihijau_exercise_logs_v1",
@@ -16,8 +19,10 @@ const KEYS = {
   WEIGHT_LOGS: "nutrihijau_weight_logs_v1",
   COACH_CHATS: "nutrihijau_coach_chats_v1",
   WEEKLY_PLAN: "nutrihijau_weekly_plan_v1",
-  THEME: "nutrihijau_theme_v1",
 };
+
+const STORE_KEY = "nutrihijau_family_store_v2";
+const THEME_KEY = "nutrihijau_theme_v1";
 
 function safeRead<T>(key: string, fallback: T): T {
   try {
@@ -37,91 +42,152 @@ function safeWrite<T>(key: string, value: T): void {
   }
 }
 
-export function loadProfile(): UserProfile | null {
-  return safeRead<UserProfile | null>(KEYS.PROFILE, null);
+export function createEmptyMemberData(): MemberNutritionData {
+  return {
+    foodLogs: [],
+    exerciseLogs: [],
+    waterLogs: {},
+    weightLogs: [],
+    coachChats: {},
+    dailyConsultChats: [],
+    weeklyPlan: null,
+  };
 }
 
-export function saveProfile(profile: UserProfile): void {
-  safeWrite(KEYS.PROFILE, profile);
+function inferRoleFromLegacyProfile(p: Partial<UserProfile>): FamilyRelationRole {
+  if (p.category === "postpartum") return "ibu";
+  if (p.category === "child_teen") {
+    return (p.age ?? 10) >= 13 ? "remaja" : "anak";
+  }
+  if ((p.age ?? 30) >= 60) return "lansia";
+  if (p.category === "adult_male") return "ayah";
+  return "ibu";
 }
 
-export function loadFoodLogs(): FoodLogEntry[] {
-  return safeRead<FoodLogEntry[]>(KEYS.FOOD_LOGS, []);
+function normalizeMemberProfile(raw: Partial<UserProfile>, fallbackId: string): UserProfile {
+  const category = raw.category ?? "adult_female";
+  const currentWeight = Number(raw.currentWeight) || 60;
+  const targetWeight = Number(raw.targetWeight) || currentWeight;
+  return {
+    id: raw.id || fallbackId,
+    name: raw.name || "Sahabat Sehat",
+    relationRole: raw.relationRole || inferRoleFromLegacyProfile(raw),
+    category,
+    nutritionFocus:
+      raw.nutritionFocus ||
+      inferDefaultNutritionFocus(category, currentWeight, targetWeight),
+    gender: raw.gender ?? (category === "adult_male" ? "male" : "female"),
+    age: Number(raw.age) || 28,
+    currentWeight,
+    height: Number(raw.height) || 160,
+    targetWeight,
+    activityLevel: raw.activityLevel ?? "light",
+    isBreastfeeding: Boolean(raw.isBreastfeeding),
+    lactationStage: raw.lactationStage,
+    medicalNotes: raw.medicalNotes,
+    updatedAt: raw.updatedAt || new Date().toISOString(),
+  };
 }
 
-export function saveFoodLogs(logs: FoodLogEntry[]): void {
-  safeWrite(KEYS.FOOD_LOGS, logs);
+export function loadFamilyStore(): FamilyStore {
+  const existingV2 = safeRead<FamilyStore | null>(STORE_KEY, null);
+  if (existingV2 && Array.isArray(existingV2.members)) {
+    const normalizedMembers = existingV2.members.map((m, idx) =>
+      normalizeMemberProfile(m, `member_${idx + 1}`)
+    );
+    const activeMemberId =
+      existingV2.activeMemberId &&
+      normalizedMembers.some((m) => m.id === existingV2.activeMemberId)
+        ? existingV2.activeMemberId
+        : normalizedMembers[0]?.id ?? null;
+
+    const memberData: Record<string, MemberNutritionData> = {};
+    normalizedMembers.forEach((m) => {
+      const data = existingV2.memberData?.[m.id];
+      memberData[m.id] = {
+        foodLogs: Array.isArray(data?.foodLogs) ? data.foodLogs : [],
+        exerciseLogs: Array.isArray(data?.exerciseLogs) ? data.exerciseLogs : [],
+        waterLogs: data?.waterLogs && typeof data.waterLogs === "object" ? data.waterLogs : {},
+        weightLogs: Array.isArray(data?.weightLogs) ? data.weightLogs : [],
+        coachChats: data?.coachChats && typeof data.coachChats === "object" ? data.coachChats : {},
+        dailyConsultChats: Array.isArray(data?.dailyConsultChats) ? data.dailyConsultChats : [],
+        weeklyPlan: data?.weeklyPlan ?? null,
+      };
+    });
+
+    return {
+      familyName: existingV2.familyName || "Keluarga Sehat",
+      activeMemberId,
+      members: normalizedMembers,
+      memberData,
+      familyWeeklyPlan: existingV2.familyWeeklyPlan ?? null,
+    };
+  }
+
+  // Migrate legacy single-user v1 store if present
+  const legacyProfile = safeRead<Partial<UserProfile> | null>(LEGACY_KEYS.PROFILE, null);
+  if (legacyProfile) {
+    const primaryId = "member_primary";
+    const migratedMember = normalizeMemberProfile(legacyProfile, primaryId);
+    const legacyFoods = safeRead<FoodLogEntry[]>(LEGACY_KEYS.FOOD_LOGS, []);
+    const legacyExercises = safeRead<ExerciseLogEntry[]>(LEGACY_KEYS.EXERCISE_LOGS, []);
+    const legacyWater = safeRead<Record<string, number>>(LEGACY_KEYS.WATER_LOGS, {});
+    const legacyWeights = safeRead<WeightLogEntry[]>(LEGACY_KEYS.WEIGHT_LOGS, []);
+    const legacyChats = safeRead<Record<string, ChatMessage[]>>(LEGACY_KEYS.COACH_CHATS, {});
+    const legacyPlan = safeRead<WeeklyMealPlan | null>(LEGACY_KEYS.WEEKLY_PLAN, null);
+
+    const migratedStore: FamilyStore = {
+      familyName: "Keluarga Sehat",
+      activeMemberId: primaryId,
+      members: [migratedMember],
+      memberData: {
+        [primaryId]: {
+          foodLogs: legacyFoods,
+          exerciseLogs: legacyExercises,
+          waterLogs: legacyWater,
+          weightLogs: legacyWeights,
+          coachChats: legacyChats,
+          weeklyPlan: legacyPlan,
+        },
+      },
+      familyWeeklyPlan: null,
+    };
+    saveFamilyStore(migratedStore);
+    return migratedStore;
+  }
+
+  return {
+    familyName: "Keluarga Sehat",
+    activeMemberId: null,
+    members: [],
+    memberData: {},
+    familyWeeklyPlan: null,
+  };
 }
 
-export function loadExerciseLogs(): ExerciseLogEntry[] {
-  return safeRead<ExerciseLogEntry[]>(KEYS.EXERCISE_LOGS, []);
+export function saveFamilyStore(store: FamilyStore): void {
+  safeWrite(STORE_KEY, store);
 }
 
-export function saveExerciseLogs(logs: ExerciseLogEntry[]): void {
-  safeWrite(KEYS.EXERCISE_LOGS, logs);
-}
-
-export function loadWaterLogs(): Record<string, number> {
-  return safeRead<Record<string, number>>(KEYS.WATER_LOGS, {});
-}
-
-export function saveWaterLogs(logs: Record<string, number>): void {
-  safeWrite(KEYS.WATER_LOGS, logs);
-}
-
-export function loadWeightLogs(): WeightLogEntry[] {
-  return safeRead<WeightLogEntry[]>(KEYS.WEIGHT_LOGS, []);
-}
-
-export function saveWeightLogs(logs: WeightLogEntry[]): void {
-  safeWrite(KEYS.WEIGHT_LOGS, logs);
-}
-
-export function upsertTodayWeight(
+export function upsertWeightEntry(
   existing: WeightLogEntry[],
   weightKg: number,
   dateKey = getTodayDateKey()
 ): WeightLogEntry[] {
   const now = new Date().toISOString();
   const filtered = existing.filter((entry) => entry.date !== dateKey);
-  const next = [...filtered, { date: dateKey, weightKg, updatedAt: now }].sort((a, b) =>
+  return [...filtered, { date: dateKey, weightKg, updatedAt: now }].sort((a, b) =>
     a.date.localeCompare(b.date)
   );
-  saveWeightLogs(next);
-  return next;
-}
-
-export function loadCoachChats(): Record<string, ChatMessage[]> {
-  return safeRead<Record<string, ChatMessage[]>>(KEYS.COACH_CHATS, {});
-}
-
-export function saveCoachChats(chats: Record<string, ChatMessage[]>): void {
-  safeWrite(KEYS.COACH_CHATS, chats);
-}
-
-export function loadWeeklyMealPlan(): WeeklyMealPlan | null {
-  return safeRead<WeeklyMealPlan | null>(KEYS.WEEKLY_PLAN, null);
-}
-
-export function saveWeeklyMealPlan(plan: WeeklyMealPlan | null): void {
-  if (!plan) {
-    try {
-      window.localStorage.removeItem(KEYS.WEEKLY_PLAN);
-    } catch {
-      // Ignore storage errors
-    }
-    return;
-  }
-  safeWrite(KEYS.WEEKLY_PLAN, plan);
 }
 
 export type ThemeMode = "light" | "dark";
 
 export function loadTheme(): ThemeMode {
-  const stored = safeRead<string | null>(KEYS.THEME, null);
+  const stored = safeRead<string | null>(THEME_KEY, null);
   return stored === "dark" ? "dark" : "light";
 }
 
 export function saveTheme(theme: ThemeMode): void {
-  safeWrite(KEYS.THEME, theme);
+  safeWrite(THEME_KEY, theme);
 }

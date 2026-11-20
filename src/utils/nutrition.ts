@@ -1,8 +1,10 @@
 import type {
   ActivityLevel,
   DietCategory,
+  FamilyRelationRole,
   Gender,
   MealType,
+  NutritionFocusGoal,
   NutritionPlan,
   UserProfile,
 } from "../types";
@@ -81,6 +83,169 @@ export const CATEGORY_MAP: Record<DietCategory, CategoryMeta> = {
   adult_male: CATEGORY_LIST[2],
   child_teen: CATEGORY_LIST[3],
 };
+
+export interface FamilyRoleMeta {
+  id: FamilyRelationRole;
+  label: string;
+  defaultCategory: DietCategory;
+  defaultGender: Gender;
+  defaultAge: number;
+  defaultWeight: number;
+  defaultHeight: number;
+  defaultTargetWeight: number;
+  defaultFocus: NutritionFocusGoal;
+}
+
+export const FAMILY_ROLE_OPTIONS: FamilyRoleMeta[] = [
+  {
+    id: "ibu",
+    label: "Ibu",
+    defaultCategory: "adult_female",
+    defaultGender: "female",
+    defaultAge: 32,
+    defaultWeight: 60,
+    defaultHeight: 159,
+    defaultTargetWeight: 56,
+    defaultFocus: "gizi_seimbang",
+  },
+  {
+    id: "ayah",
+    label: "Ayah",
+    defaultCategory: "adult_male",
+    defaultGender: "male",
+    defaultAge: 34,
+    defaultWeight: 76,
+    defaultHeight: 172,
+    defaultTargetWeight: 70,
+    defaultFocus: "penurunan_berat",
+  },
+  {
+    id: "anak",
+    label: "Anak",
+    defaultCategory: "child_teen",
+    defaultGender: "male",
+    defaultAge: 9,
+    defaultWeight: 29,
+    defaultHeight: 133,
+    defaultTargetWeight: 29,
+    defaultFocus: "pertumbuhan_anak",
+  },
+  {
+    id: "remaja",
+    label: "Remaja",
+    defaultCategory: "child_teen",
+    defaultGender: "female",
+    defaultAge: 15,
+    defaultWeight: 52,
+    defaultHeight: 159,
+    defaultTargetWeight: 52,
+    defaultFocus: "pertumbuhan_anak",
+  },
+  {
+    id: "lansia",
+    label: "Orang Tua / Lansia",
+    defaultCategory: "adult_female",
+    defaultGender: "female",
+    defaultAge: 65,
+    defaultWeight: 58,
+    defaultHeight: 156,
+    defaultTargetWeight: 58,
+    defaultFocus: "gizi_seimbang",
+  },
+  {
+    id: "lainnya",
+    label: "Anggota Lain",
+    defaultCategory: "adult_female",
+    defaultGender: "female",
+    defaultAge: 26,
+    defaultWeight: 60,
+    defaultHeight: 162,
+    defaultTargetWeight: 56,
+    defaultFocus: "gizi_seimbang",
+  },
+];
+
+export const FAMILY_ROLE_MAP: Record<FamilyRelationRole, FamilyRoleMeta> = {
+  ibu: FAMILY_ROLE_OPTIONS[0],
+  ayah: FAMILY_ROLE_OPTIONS[1],
+  anak: FAMILY_ROLE_OPTIONS[2],
+  remaja: FAMILY_ROLE_OPTIONS[3],
+  lansia: FAMILY_ROLE_OPTIONS[4],
+  lainnya: FAMILY_ROLE_OPTIONS[5],
+};
+
+export interface NutritionFocusMeta {
+  id: NutritionFocusGoal;
+  label: string;
+  shortLabel: string;
+  description: string;
+}
+
+export const NUTRITION_FOCUS_OPTIONS: NutritionFocusMeta[] = [
+  {
+    id: "gizi_seimbang",
+    label: "Gizi Seimbang & Vitalitas",
+    shortLabel: "Gizi Seimbang",
+    description:
+      "Pemeliharaan kalori seimbang harian agar energi, daya tahan tubuh, dan metabolisme keluarga tetap optimal.",
+  },
+  {
+    id: "penurunan_berat",
+    label: "Penurunan Berat Sehat",
+    shortLabel: "Turun Berat",
+    description:
+      "Defisit kalori terukur 300–500 kkal dengan protein cukup agar lemak berkurang tanpa rasa lemas.",
+  },
+  {
+    id: "pemulihan_laktasi",
+    label: "Pemulihan & Nutrisi ASI",
+    shortLabel: "Pemulihan & ASI",
+    description:
+      "Prioritas pemulihan pasca-melahirkan, kecukupan cairan, zat besi, kalsium, dan kalori aman menyusui.",
+  },
+  {
+    id: "pertumbuhan_anak",
+    label: "Tumbuh Kembang Anak & Remaja",
+    shortLabel: "Tumbuh Kembang",
+    description:
+      "Nutrisi penuh untuk pertumbuhan tinggi badan, konsentrasi belajar, dan energi bermain tanpa diet ketat.",
+  },
+  {
+    id: "peningkatan_otot",
+    label: "Massa Otot & Kebugaran",
+    shortLabel: "Massa Otot",
+    description:
+      "Optimalisasi protein harian dan asupan energi untuk kekuatan otot serta kebugaran aktif.",
+  },
+  {
+    id: "penambahan_berat",
+    label: "Pemulihan / Tambah Berat Sehat",
+    shortLabel: "Tambah Berat",
+    description:
+      "Surplus kalori bertahap (+250–300 kkal) dari makanan padat gizi untuk menaikkan berat secara sehat.",
+  },
+];
+
+export const NUTRITION_FOCUS_MAP: Record<NutritionFocusGoal, NutritionFocusMeta> = {
+  gizi_seimbang: NUTRITION_FOCUS_OPTIONS[0],
+  penurunan_berat: NUTRITION_FOCUS_OPTIONS[1],
+  pemulihan_laktasi: NUTRITION_FOCUS_OPTIONS[2],
+  pertumbuhan_anak: NUTRITION_FOCUS_OPTIONS[3],
+  peningkatan_otot: NUTRITION_FOCUS_OPTIONS[4],
+  penambahan_berat: NUTRITION_FOCUS_OPTIONS[5],
+};
+
+export function inferDefaultNutritionFocus(
+  category: DietCategory,
+  currentWeight: number,
+  targetWeight: number
+): NutritionFocusGoal {
+  if (category === "child_teen") return "pertumbuhan_anak";
+  if (category === "postpartum") return "pemulihan_laktasi";
+  if (targetWeight < currentWeight - 0.5) return "penurunan_berat";
+  if (targetWeight > currentWeight + 0.5) return "penambahan_berat";
+  return "gizi_seimbang";
+}
 
 export const ACTIVITY_OPTIONS: Array<{
   id: ActivityLevel;
@@ -417,6 +582,13 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
     }
   }
 
+  const effectiveFocus: NutritionFocusGoal =
+    profile.category === "child_teen"
+      ? "pertumbuhan_anak"
+      : profile.nutritionFocus ||
+        inferDefaultNutritionFocus(profile.category, weight, targetWeight);
+  const isSenior = age >= 60;
+
   let lactationBonus = 0;
   let calorieAdjustment = 0;
   let dailyCalorieTarget = tdee;
@@ -436,7 +608,17 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
 
     if (isUnderweight) {
       isDeficitBlockedByUnderweight = true;
-      calorieAdjustment = targetWeight > weight + 0.5 ? 200 : 0;
+      calorieAdjustment =
+        targetWeight > weight + 0.5 || effectiveFocus === "penambahan_berat" ? 250 : 0;
+      dailyCalorieTarget = baseNeed + calorieAdjustment;
+    } else if (
+      effectiveFocus === "gizi_seimbang" ||
+      (effectiveFocus === "pemulihan_laktasi" && targetWeight >= weight - 0.5)
+    ) {
+      calorieAdjustment = 0;
+      dailyCalorieTarget = Math.max(profile.isBreastfeeding ? 1800 : 1500, baseNeed);
+    } else if (effectiveFocus === "penambahan_berat") {
+      calorieAdjustment = 250;
       dailyCalorieTarget = baseNeed + calorieAdjustment;
     } else {
       const rawDeficit = targetWeight < weight - 0.5 ? -250 : 0;
@@ -462,32 +644,56 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
           : "Panduan Menyusui Lanjutan (>6 Bulan + MPASI)"
         : "Panduan Pemulihan Pasca-Melahirkan";
       safetyBannerText = profile.isBreastfeeding
-        ? `Kebutuhan kalori Anda telah ditambah +${lactationBonus} kkal untuk mendukung produksi ASI sebelum defisit ringan diterapkan. Fokuskan pada pemulihan tubuh, kecukupan cairan (${waterTargetMl.toLocaleString("id-ID")} ml/hari), zat besi, kalsium, dan protein seimbang.`
-        : "Fokuskan pola makan pada pemulihan energi, perbaikan jaringan tubuh, dan nutrisi seimbang dengan defisit ringan agar stamina harian tetap prima.";
+        ? `Kebutuhan kalori Anda telah ditambah +${lactationBonus} kkal untuk mendukung produksi ASI. Fokuskan pada pemulihan tubuh, kecukupan cairan (${waterTargetMl.toLocaleString("id-ID")} ml/hari), zat besi, kalsium, dan protein seimbang.`
+        : "Fokuskan pola makan pada pemulihan energi, perbaikan jaringan tubuh, dan nutrisi seimbang agar stamina harian tetap prima.";
     }
   } else if (profile.category === "child_teen") {
     lactationBonus = 0;
-    calorieAdjustment = 0;
     const ageFloor = age < 8 ? 1150 : age < 11 ? 1300 : 1450;
-    dailyCalorieTarget = Math.max(ageFloor, tdee);
-    waterTargetMl = age < 10 ? 1500 : age < 14 ? 1800 : 2100;
-
-    safetyBannerTitle = "Mode Pertumbuhan Sehat (Tanpa Defisit Ekstrem)";
-    safetyBannerText =
-      "Target kalori dihitung memakai rumus pediatrik Schofield dan difokuskan pada pemeliharaan energi (maintenance) untuk mendukung tinggi badan serta perkembangan optimal. Pengaturan pola makan anak/remaja harus dalam pengawasan orang tua dan dokter/ahli gizi.";
-  } else {
-    // Adult Male & Adult Female
     if (isUnderweight) {
       isDeficitBlockedByUnderweight = true;
-      calorieAdjustment = targetWeight > weight + 0.5 ? 250 : 0;
+      calorieAdjustment = 200;
+      dailyCalorieTarget = Math.max(ageFloor, tdee + calorieAdjustment);
+      safetyBannerTitle = "Prioritas Pemulihan Gizi & Pertumbuhan Anak";
+      safetyBannerText =
+        "Skor-Z BMI berada di bawah -2 SD (Gizi Kurang). Target kalori ditambah bertahap (+200 kkal dari kebutuhan pemeliharaan) untuk mendukung kejar tumbuh dengan pendampingan orang tua dan dokter/ahli gizi.";
+    } else {
+      calorieAdjustment = 0;
+      dailyCalorieTarget = Math.max(ageFloor, tdee);
+      const isLowerTargetEntered = targetWeight < weight - 0.5 && bmiTone === "good";
+      safetyBannerTitle = "Mode Pertumbuhan Sehat (Tanpa Defisit Ekstrem)";
+      safetyBannerText = isLowerTargetEntered
+        ? "Skor-Z BMI anak/remaja sudah dalam rentang sehat WHO 2007. Target kalori tetap dipertahankan pada level pemeliharaan untuk mendukung pertambahan tinggi badan dan perkembangan organ; lakukan pemantauan rutin bersama orang tua dan dokter/ahli gizi."
+        : "Target kalori dihitung memakai rumus pediatrik Schofield dan difokuskan pada pemeliharaan energi (maintenance) untuk mendukung tinggi badan serta perkembangan optimal. Pengaturan pola makan anak/remaja harus dalam pengawasan orang tua dan dokter/ahli gizi.";
+    }
+    waterTargetMl = age < 10 ? 1500 : age < 14 ? 1800 : 2100;
+  } else {
+    // Adult Male & Adult Female (including Senior 60+)
+    if (isUnderweight) {
+      isDeficitBlockedByUnderweight = true;
+      calorieAdjustment =
+        targetWeight > weight + 0.5 || effectiveFocus === "penambahan_berat" ? 250 : 0;
       dailyCalorieTarget = tdee + calorieAdjustment;
       safetyBannerTitle = "Defisit Kalori Dinonaktifkan (BMI < 18,5)";
       safetyBannerText =
-        "BMI Anda tergolong Berat Badan Kurang. Demi keamanan, target kalori diarahkan ke pemeliharaan/pemulihan berat sehat, bukan penurunan berat badan.";
+        "BMI tergolong Berat Badan Kurang. Demi keamanan, target kalori diarahkan ke pemeliharaan atau pemulihan berat sehat padat gizi.";
+    } else if (effectiveFocus === "gizi_seimbang") {
+      calorieAdjustment = 0;
+      dailyCalorieTarget = tdee;
+    } else if (effectiveFocus === "penambahan_berat") {
+      calorieAdjustment = 300;
+      dailyCalorieTarget = tdee + calorieAdjustment;
+    } else if (effectiveFocus === "peningkatan_otot") {
+      const diff = weight - targetWeight;
+      calorieAdjustment = diff > 2 ? -200 : 200;
+      const safeFloor = profile.category === "adult_male" ? 1600 : 1350;
+      dailyCalorieTarget = Math.max(safeFloor, tdee + calorieAdjustment);
+      calorieAdjustment = dailyCalorieTarget - tdee;
     } else {
       const diff = weight - targetWeight;
       if (diff > 0.5) {
-        calorieAdjustment = diff >= 8 ? -500 : diff >= 3 ? -400 : -300;
+        const rawDeficit = diff >= 8 ? -500 : diff >= 3 ? -400 : -300;
+        calorieAdjustment = isSenior ? Math.max(-300, rawDeficit) : rawDeficit;
       } else if (diff < -0.5) {
         calorieAdjustment = 250;
       } else {
@@ -497,10 +703,17 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
       dailyCalorieTarget = Math.max(safeFloor, tdee + calorieAdjustment);
       calorieAdjustment = dailyCalorieTarget - tdee;
     }
-    waterTargetMl = 2000;
+
+    if (isSenior && !safetyBannerTitle) {
+      safetyBannerTitle = "Prioritas Nutrisi Usia Lanjut (60+ Tahun)";
+      safetyBannerText =
+        "Pada usia 60+ tahun, fokus utama adalah menjaga massa otot (kecukupan protein), kepadatan tulang (kalsium & vitamin D), serat, dan hidrasi tanpa defisit kalori yang terlalu drastis.";
+    }
+
+    waterTargetMl = isSenior ? 1800 : 2000;
   }
 
-  // Reference weight-anchored protein calculation for adults (prevents excessive protein on high BMI)
+  // Reference weight-anchored protein calculation (aligned with AKG Kemenkes RI & AMDR)
   let proteinG = 0;
   let fatG = 0;
   let carbsG = 0;
@@ -514,10 +727,28 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
     const idealWeight = 22 * heightM * heightM;
     const referenceWeight =
       bmi > 25 ? idealWeight + 0.25 * (weight - idealWeight) : weight;
-    const proteinPerKg = profile.category === "postpartum" ? 1.35 : 1.45;
+    const proteinPerKg =
+      effectiveFocus === "peningkatan_otot"
+        ? 1.7
+        : profile.category === "postpartum"
+          ? 1.35
+          : isSenior
+            ? 1.3
+            : effectiveFocus === "penurunan_berat"
+              ? 1.45
+              : 1.25;
+    const lactationProteinBonus =
+      profile.category === "postpartum" && profile.isBreastfeeding
+        ? (profile.lactationStage ?? "exclusive_0_6") === "exclusive_0_6"
+          ? 18
+          : 12
+        : 0;
     const minProt = Math.round((dailyCalorieTarget * 0.2) / 4);
-    const maxProt = Math.round((dailyCalorieTarget * 0.32) / 4);
-    proteinG = Math.max(minProt, Math.min(maxProt, Math.round(referenceWeight * proteinPerKg)));
+    const maxProt = Math.round((dailyCalorieTarget * 0.34) / 4);
+    proteinG = Math.max(
+      minProt,
+      Math.min(maxProt, Math.round(referenceWeight * proteinPerKg + lactationProteinBonus))
+    );
     fatG = Math.round((dailyCalorieTarget * 0.28) / 9);
     carbsG = Math.max(100, Math.round((dailyCalorieTarget - proteinG * 4 - fatG * 9) / 4));
   }
@@ -544,23 +775,64 @@ export function calculateNutritionPlan(profile: UserProfile): NutritionPlan {
   };
 }
 
-export function getQuickPromptsForCategory(category: DietCategory, isBreastfeeding?: boolean): string[] {
+export function getQuickPromptsForCategory(
+  category: DietCategory,
+  isBreastfeeding?: boolean,
+  nutritionFocus?: NutritionFocusGoal,
+  age?: number
+): string[] {
+  if (age && age >= 60) {
+    return [
+      "Menu rumahan lembut tinggi protein & kalsium untuk lansia",
+      "Olahraga ringan 15 menit untuk menjaga kekuatan otot dan sendi",
+      "Ide sarapan ramah lambung dan gula darah stabil",
+      "Cara mencukupi serat dan cairan harian di usia lanjut",
+    ];
+  }
+
+  if (nutritionFocus === "peningkatan_otot") {
+    return [
+      "Menu makan harian tinggi protein dengan bahan lokal terjangkau",
+      "Latihan kekuatan di rumah 20 menit tanpa alat berat",
+      "Ide camilan pemulihan otot setelah berolahraga",
+      "Cara membagi asupan protein agar penyerapan optimal",
+    ];
+  }
+
+  if (nutritionFocus === "gizi_seimbang") {
+    return [
+      "Ide menu makan keluarga seimbang sesuai Isi Piringku",
+      "Sarapan praktis 15 menit yang menjaga energi hingga siang",
+      "Camilan sore sehat rendah gula untuk seluruh keluarga",
+      "Aktivitas fisik ringan 20 menit bersama keluarga di akhir pekan",
+    ];
+  }
+
+  if (nutritionFocus === "penambahan_berat") {
+    return [
+      "Menu padat gizi tinggi protein untuk menaikkan berat badan sehat",
+      "Ide camilan kalori sehat tanpa gorengan atau gula berlebih",
+      "Kombinasi latihan beban ringan dan nutrisi pemulihan",
+      "Cara menambah porsi makan bertahap tanpa terasa begah",
+    ];
+  }
+
   switch (category) {
     case "postpartum":
       return [
-        "Menu pelancar ASI yang rendah kalori",
+        "Menu pelancar ASI yang bergizi dan seimbang",
         "Olahraga ringan pemulihan otot perut (diastasis recti)",
         isBreastfeeding
           ? "Camilan sehat anti lapar saat menyusui malam"
           : "Menu makan siang tinggi zat besi untuk pemulihan",
-        "Tips turun berat badan aman pasca-melahirkan",
+        "Tips menjaga berat badan dan energi pasca-melahirkan",
       ];
     case "child_teen":
       return [
         "Ide bekal sekolah sehat dan bergizi seimbang",
         "Aktivitas fisik menyenangkan 20 menit untuk anak",
         "Camilan sore bergizi pengganti jajanan manis",
-        "Cara mengatur porsi makan seimbang tanpa diet ketat",
+        "Cara mengatur porsi makan seimbang untuk tumbuh kembang",
       ];
     case "adult_male":
       return [

@@ -16,6 +16,8 @@ import type {
 } from "../types";
 import {
   CATEGORY_MAP,
+  NUTRITION_FOCUS_MAP,
+  calculateNutritionPlan,
   getQuickPromptsForCategory,
   getTodayDateKey,
 } from "../utils/nutrition";
@@ -26,6 +28,8 @@ interface AiCoachViewProps {
   foodLogs: FoodLogEntry[];
   exerciseLogs: ExerciseLogEntry[];
   waterLogs: Record<string, number>;
+  familyName: string;
+  familyMembers: UserProfile[];
   messages: ChatMessage[];
   onAppendMessages: (msgs: ChatMessage[]) => void;
   onResetChat: () => void;
@@ -103,6 +107,8 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
   foodLogs,
   exerciseLogs,
   waterLogs,
+  familyName,
+  familyMembers,
   messages,
   onAppendMessages,
   onResetChat,
@@ -112,10 +118,28 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string>("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  const quickPrompts = useMemo(
-    () => getQuickPromptsForCategory(profile.category, profile.isBreastfeeding),
-    [profile.category, profile.isBreastfeeding]
-  );
+  const quickPrompts = useMemo(() => {
+    const base = getQuickPromptsForCategory(
+      profile.category,
+      profile.isBreastfeeding,
+      profile.nutritionFocus,
+      profile.age
+    );
+    if (familyMembers.length > 1) {
+      return [
+        ...base.slice(0, 3),
+        `Ide makan malam bergizi yang cocok untuk seluruh ${familyName} (${familyMembers.length} anggota)`,
+      ];
+    }
+    return base;
+  }, [
+    profile.category,
+    profile.isBreastfeeding,
+    profile.nutritionFocus,
+    profile.age,
+    familyMembers.length,
+    familyName,
+  ]);
 
   const todaySummary = useMemo(() => {
     const todayKey = getTodayDateKey();
@@ -172,6 +196,20 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
             proteinTargetG: plan.macroTargets.proteinG,
           },
           todaySummary,
+          familyContext:
+            familyMembers.length > 1
+              ? {
+                  familyName,
+                  members: familyMembers.map((m) => ({
+                    name: m.name,
+                    relationRole: m.relationRole,
+                    age: m.age,
+                    nutritionFocus: m.nutritionFocus,
+                    dailyCalorieTarget: calculateNutritionPlan(m).dailyCalorieTarget,
+                    medicalNotes: m.medicalNotes,
+                  })),
+                }
+              : undefined,
         }),
       });
 
@@ -209,15 +247,15 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5]">
-            Pelatih Diet & Olahraga AI
+            Pelatih Gizi & Kebugaran AI
           </h1>
           <p className="text-xs sm:text-sm text-[#64748B] dark:text-emerald-200/75 mt-0.5">
-            Dipersonalisasi untuk{" "}
+            Anggota aktif:{" "}
             <strong className="text-[#10B981] dark:text-[#34D399]">
-              Mode: {CATEGORY_MAP[profile.category].shortLabel}
+              {profile.name} ({NUTRITION_FOCUS_MAP[profile.nutritionFocus]?.shortLabel ?? CATEGORY_MAP[profile.category].shortLabel}
               {profile.category === "postpartum" && profile.isBreastfeeding
-                ? " (Menyusui)"
-                : ""}
+                ? " · Menyusui"
+                : ""})
             </strong>{" "}
             · Target {plan.dailyCalorieTarget.toLocaleString("id-ID")} kkal/hari
           </p>

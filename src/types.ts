@@ -8,14 +8,36 @@ export type MealType = "sarapan" | "makan_siang" | "makan_malam" | "camilan";
 
 export type LactationStage = "exclusive_0_6" | "partial_6_plus";
 
-export type AppTab = "dashboard" | "food" | "mealplan" | "coach" | "profile";
+export type FamilyRelationRole =
+  | "ibu"
+  | "ayah"
+  | "anak"
+  | "remaja"
+  | "lansia"
+  | "lainnya";
+
+export type NutritionFocusGoal =
+  | "penurunan_berat"
+  | "gizi_seimbang"
+  | "pertumbuhan_anak"
+  | "pemulihan_laktasi"
+  | "peningkatan_otot"
+  | "penambahan_berat";
+
+export type AppTab =
+  | "dashboard"
+  | "food"
+  | "mealplan"
+  | "coach"
+  | "profile";
 
 export type DietGoalType =
   | "turun_berat"
   | "pemulihan_asi"
   | "pertumbuhan_sehat"
   | "pemeliharaan"
-  | "tinggi_protein";
+  | "tinggi_protein"
+  | "tambah_berat";
 
 export type MenuBudgetStyle =
   | "rumahan_hemat"
@@ -56,7 +78,10 @@ export interface WeeklyMealPlan {
   dietGoal: DietGoalType;
   budgetStyle: MenuBudgetStyle;
   preferencesNote: string;
+  profileCategory?: DietCategory;
+  medicalNotesSnapshot?: string;
   targetCaloriesPerDay: number;
+  weeklyAverageCalories?: number;
   planTitle: string;
   nutritionistSummary: string;
   safetyReminder: string;
@@ -65,9 +90,50 @@ export interface WeeklyMealPlan {
   checkedShoppingItems: string[];
 }
 
+export interface FamilyMemberPortion {
+  memberId: string;
+  memberName: string;
+  portionInstruction: string;
+  estimatedCalories: number;
+}
+
+export interface FamilyPlannedMeal {
+  mealType: MealType;
+  dishName: string;
+  baseIngredientsNote: string;
+  prepNote: string;
+  memberPortions: FamilyMemberPortion[];
+}
+
+export interface FamilyPlanDay {
+  dayNumber: number;
+  dayName: string;
+  dailyTheme: string;
+  dailyTip: string;
+  meals: FamilyPlannedMeal[];
+}
+
+export interface FamilyWeeklyMealPlan {
+  id: string;
+  generatedAt: string;
+  familyName: string;
+  budgetStyle: MenuBudgetStyle;
+  preferencesNote: string;
+  memberIdsSnapshot: string[];
+  planTitle: string;
+  nutritionistSummary: string;
+  safetyReminder: string;
+  days: FamilyPlanDay[];
+  shoppingList: ShoppingCategoryGroup[];
+  checkedShoppingItems: string[];
+}
+
 export interface UserProfile {
+  id: string;
   name: string;
+  relationRole: FamilyRelationRole;
   category: DietCategory;
+  nutritionFocus: NutritionFocusGoal;
   gender: Gender;
   age: number;
   currentWeight: number;
@@ -140,9 +206,39 @@ export interface WeightLogEntry {
   updatedAt: string;
 }
 
+export interface SuggestedMealReplacement {
+  mealType: MealType;
+  foodName: string;
+  portionNote: string;
+  calories: number;
+  carbs: number;
+  protein: number;
+  fat: number;
+  orderingTip?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "model";
   text: string;
   timestamp: string;
+  suggestedMeal?: SuggestedMealReplacement;
+}
+
+export interface MemberNutritionData {
+  foodLogs: FoodLogEntry[];
+  exerciseLogs: ExerciseLogEntry[];
+  waterLogs: Record<string, number>;
+  weightLogs: WeightLogEntry[];
+  coachChats: Record<string, ChatMessage[]>;
+  dailyConsultChats?: ChatMessage[];
+  weeklyPlan: WeeklyMealPlan | null;
+}
+
+export interface FamilyStore {
+  familyName: string;
+  activeMemberId: string | null;
+  members: UserProfile[];
+  memberData: Record<string, MemberNutritionData>;
+  familyWeeklyPlan: FamilyWeeklyMealPlan | null;
 }
