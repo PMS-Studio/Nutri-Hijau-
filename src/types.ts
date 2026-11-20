@@ -8,7 +8,62 @@ export type MealType = "sarapan" | "makan_siang" | "makan_malam" | "camilan";
 
 export type LactationStage = "exclusive_0_6" | "partial_6_plus";
 
-export type AppTab = "dashboard" | "food" | "coach" | "profile";
+export type AppTab = "dashboard" | "food" | "mealplan" | "coach" | "profile";
+
+export type DietGoalType =
+  | "turun_berat"
+  | "pemulihan_asi"
+  | "pertumbuhan_sehat"
+  | "pemeliharaan"
+  | "tinggi_protein";
+
+export type MenuBudgetStyle =
+  | "rumahan_hemat"
+  | "praktis_seimbang"
+  | "variasi_lengkap";
+
+export interface PlannedMealItem {
+  mealType: MealType;
+  foodName: string;
+  portionNote: string;
+  calories: number;
+  carbs: number;
+  protein: number;
+  fat: number;
+  prepNote: string;
+}
+
+export interface WeeklyPlanDay {
+  dayNumber: number;
+  dayName: string;
+  dailyTheme: string;
+  dailyTip: string;
+  meals: PlannedMealItem[];
+  totalCalories: number;
+  totalCarbs: number;
+  totalProtein: number;
+  totalFat: number;
+}
+
+export interface ShoppingCategoryGroup {
+  category: string;
+  items: string[];
+}
+
+export interface WeeklyMealPlan {
+  id: string;
+  generatedAt: string;
+  dietGoal: DietGoalType;
+  budgetStyle: MenuBudgetStyle;
+  preferencesNote: string;
+  targetCaloriesPerDay: number;
+  planTitle: string;
+  nutritionistSummary: string;
+  safetyReminder: string;
+  days: WeeklyPlanDay[];
+  shoppingList: ShoppingCategoryGroup[];
+  checkedShoppingItems: string[];
+}
 
 export interface UserProfile {
   name: string;

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   BotMessageSquare,
+  CalendarDays,
   LayoutDashboard,
   Moon,
   Plus,
@@ -11,6 +12,7 @@ import {
 import { AiCoachView } from "./components/AiCoachView";
 import { DashboardView } from "./components/DashboardView";
 import { FoodLoggerView } from "./components/FoodLoggerView";
+import { MealPlanView } from "./components/MealPlanView";
 import { ProfileSetup } from "./components/ProfileSetup";
 import type {
   AppTab,
@@ -18,6 +20,7 @@ import type {
   ExerciseLogEntry,
   FoodLogEntry,
   UserProfile,
+  WeeklyMealPlan,
   WeightLogEntry,
 } from "./types";
 import {
@@ -33,6 +36,7 @@ import {
   loadProfile,
   loadTheme,
   loadWaterLogs,
+  loadWeeklyMealPlan,
   loadWeightLogs,
   saveCoachChats,
   saveExerciseLogs,
@@ -40,6 +44,7 @@ import {
   saveProfile,
   saveTheme,
   saveWaterLogs,
+  saveWeeklyMealPlan,
   upsertTodayWeight,
 } from "./utils/storage";
 
@@ -58,8 +63,14 @@ const NAV_ITEMS: Array<{
   {
     id: "food",
     label: "Catat Makanan",
-    mobileLabel: "Makanan",
+    mobileLabel: "Catat",
     icon: UtensilsCrossed,
+  },
+  {
+    id: "mealplan",
+    label: "Menu 7 Hari",
+    mobileLabel: "Menu",
+    icon: CalendarDays,
   },
   {
     id: "coach",
@@ -90,6 +101,9 @@ export default function App() {
   );
   const [coachChats, setCoachChats] = useState<Record<string, ChatMessage[]>>(() =>
     loadCoachChats()
+  );
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyMealPlan | null>(() =>
+    loadWeeklyMealPlan()
   );
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
 
@@ -220,6 +234,25 @@ export default function App() {
     };
     setCoachChats(nextChats);
     saveCoachChats(nextChats);
+  };
+
+  const handleSaveWeeklyPlan = (nextPlan: WeeklyMealPlan | null) => {
+    setWeeklyPlan(nextPlan);
+    saveWeeklyMealPlan(nextPlan);
+  };
+
+  const handleToggleShoppingItem = (itemKey: string) => {
+    if (!weeklyPlan) return;
+    const exists = weeklyPlan.checkedShoppingItems.includes(itemKey);
+    const nextChecked = exists
+      ? weeklyPlan.checkedShoppingItems.filter((k) => k !== itemKey)
+      : [...weeklyPlan.checkedShoppingItems, itemKey];
+    const nextPlan: WeeklyMealPlan = {
+      ...weeklyPlan,
+      checkedShoppingItems: nextChecked,
+    };
+    setWeeklyPlan(nextPlan);
+    saveWeeklyMealPlan(nextPlan);
   };
 
   if (!profile || !plan) {
@@ -362,6 +395,17 @@ export default function App() {
             />
           )}
 
+          {activeTab === "mealplan" && (
+            <MealPlanView
+              profile={profile}
+              plan={plan}
+              weeklyPlan={weeklyPlan}
+              onSaveWeeklyPlan={handleSaveWeeklyPlan}
+              onToggleShoppingItem={handleToggleShoppingItem}
+              onLogMealToToday={handleAddFood}
+            />
+          )}
+
           {activeTab === "coach" && (
             <AiCoachView
               profile={profile}
@@ -407,27 +451,38 @@ export default function App() {
 
         <button
           type="button"
-          onClick={() => setActiveTab("food")}
+          onClick={() => setActiveTab("mealplan")}
           className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl transition-colors cursor-pointer ${
-            activeTab === "food"
+            activeTab === "mealplan"
               ? "text-[#10B981] dark:text-[#34D399] font-semibold"
               : "text-[#64748B] dark:text-emerald-200/70"
           }`}
         >
-          <UtensilsCrossed className="w-4 h-4" />
-          <span className="text-[10px] leading-none whitespace-nowrap">Makanan</span>
+          <CalendarDays className="w-4 h-4" />
+          <span className="text-[10px] leading-none whitespace-nowrap">Menu 7H</span>
         </button>
 
-        {/* Center Quick Action Button */}
-        <div className="flex items-center justify-center">
+        {/* Center Quick Action Button -> Catat Makanan */}
+        <div className="flex flex-col items-center justify-center">
           <button
             type="button"
             onClick={() => setActiveTab("food")}
             aria-label="Catat makanan cepat"
-            className="w-11 h-11 -mt-4 rounded-2xl bg-gradient-to-br from-[#10B981] via-[#34D399] to-[#84CC16] text-[#062216] shadow-lg shadow-emerald-500/35 flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
+            className={`w-10 h-10 -mt-3 rounded-2xl bg-gradient-to-br from-[#10B981] via-[#34D399] to-[#84CC16] text-[#062216] shadow-lg shadow-emerald-500/35 flex items-center justify-center active:scale-95 transition-transform cursor-pointer ${
+              activeTab === "food" ? "ring-2 ring-[#0F172A] dark:ring-white" : ""
+            }`}
           >
             <Plus className="w-5 h-5 stroke-[2.5]" />
           </button>
+          <span
+            className={`text-[10px] leading-none mt-0.5 whitespace-nowrap ${
+              activeTab === "food"
+                ? "text-[#10B981] dark:text-[#34D399] font-semibold"
+                : "text-[#64748B] dark:text-emerald-200/70"
+            }`}
+          >
+            Catat
+          </span>
         </div>
 
         <button

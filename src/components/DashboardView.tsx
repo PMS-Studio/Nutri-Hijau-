@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowRight,
   Beef,
+  CalendarDays,
   Check,
   Droplet,
   Droplets,
@@ -264,7 +265,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => onNavigateTab("food")}
@@ -275,10 +276,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => onNavigateTab("profile")}
-            className="h-11 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-white/80 dark:bg-[#0D241B]/80 hover:bg-white dark:hover:bg-[#123024] text-[#0F172A] dark:text-[#ECFDF5] text-sm font-medium transition-colors cursor-pointer whitespace-nowrap"
+            onClick={() => onNavigateTab("mealplan")}
+            className="h-11 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-white/80 dark:bg-[#0D241B]/80 hover:bg-white dark:hover:bg-[#123024] text-[#0F172A] dark:text-[#ECFDF5] text-sm font-medium transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
           >
-            Ubah Profil
+            <CalendarDays className="w-4 h-4 text-[#10B981]" />
+            <span>Menu 7 Hari</span>
           </button>
         </div>
       </section>

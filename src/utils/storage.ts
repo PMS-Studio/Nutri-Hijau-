@@ -3,6 +3,7 @@ import type {
   ExerciseLogEntry,
   FoodLogEntry,
   UserProfile,
+  WeeklyMealPlan,
   WeightLogEntry,
 } from "../types";
 import { getTodayDateKey } from "./nutrition";
@@ -14,6 +15,7 @@ const KEYS = {
   WATER_LOGS: "nutrihijau_water_logs_v1",
   WEIGHT_LOGS: "nutrihijau_weight_logs_v1",
   COACH_CHATS: "nutrihijau_coach_chats_v1",
+  WEEKLY_PLAN: "nutrihijau_weekly_plan_v1",
   THEME: "nutrihijau_theme_v1",
 };
 
@@ -95,6 +97,22 @@ export function loadCoachChats(): Record<string, ChatMessage[]> {
 
 export function saveCoachChats(chats: Record<string, ChatMessage[]>): void {
   safeWrite(KEYS.COACH_CHATS, chats);
+}
+
+export function loadWeeklyMealPlan(): WeeklyMealPlan | null {
+  return safeRead<WeeklyMealPlan | null>(KEYS.WEEKLY_PLAN, null);
+}
+
+export function saveWeeklyMealPlan(plan: WeeklyMealPlan | null): void {
+  if (!plan) {
+    try {
+      window.localStorage.removeItem(KEYS.WEEKLY_PLAN);
+    } catch {
+      // Ignore storage errors
+    }
+    return;
+  }
+  safeWrite(KEYS.WEEKLY_PLAN, plan);
 }
 
 export type ThemeMode = "light" | "dark";
