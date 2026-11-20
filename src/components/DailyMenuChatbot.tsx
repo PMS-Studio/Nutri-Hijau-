@@ -3,8 +3,10 @@ import {
   AlertCircle,
   Bot,
   CalendarDays,
+  Camera,
   Check,
   Coffee,
+  ImagePlus,
   Loader2,
   Plus,
   RotateCcw,
@@ -12,6 +14,7 @@ import {
   Store,
   User as UserIcon,
   UtensilsCrossed,
+  X,
 } from "lucide-react";
 import type {
   ChatMessage,
@@ -25,6 +28,7 @@ import type {
 } from "../types";
 import { getTodayDateKey } from "../utils/nutrition";
 import { postJsonApi } from "../utils/api";
+import { compressImageFile } from "../utils/image";
 
 type VenueType = "warteg" | "restoran" | "kantin_katering" | "umum";
 
@@ -89,7 +93,16 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
   const [isSending, setIsSending] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [loggedSuggestionIds, setLoggedSuggestionIds] = useState<Record<string, boolean>>({});
+  const [attachedPhoto, setAttachedPhoto] = useState<{
+    base64: string;
+    mimeType: string;
+    previewDataUrl: string;
+    name: string;
+  } | null>(null);
+  const [isCompressingPhoto, setIsCompressingPhoto] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeDayContext = useMemo(() => {
     if (fixedDayContext) {
@@ -134,18 +147,52 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
     });
   };
 
+  const handleSelectPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setErrorMsg("");
+    setIsCompressingPhoto(true);
+    try {
+      const compressed = await compressImageFile(file, 1024, 0.8);
+      setAttachedPhoto({
+        base64: compressed.base64,
+        mimeType: compressed.mimeType,
+        previewDataUrl: compressed.previewDataUrl,
+        name: file.name || "foto-menu.jpg",
+      });
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Gagal memproses foto menu."
+      );
+    } finally {
+      setIsCompressingPhoto(false);
+    }
+  };
+
   const handleSend = async (promptText?: string) => {
-    const trimmed = (promptText ?? input).trim();
-    if (!trimmed || isSending) return;
+    const rawText = (promptText ?? input).trim();
+    const photoSnapshot = promptText ? null : attachedPhoto;
+    const effectiveText =
+      rawText ||
+      (photoSnapshot
+        ? "Tolong baca pilihan lauk atau menu di foto ini, perkirakan kalorinya, dan pilihkan kombinasi paling pas untuk target gizi saya hari ini."
+        : "");
+
+    if (!effectiveText || isSending) return;
 
     const userMsg: ChatMessage = {
       id: `mc_u_${Date.now()}`,
       role: "user",
-      text: trimmed,
+      text: effectiveText,
       timestamp: new Date().toISOString(),
+      hasPhoto: Boolean(photoSnapshot),
     };
 
-    if (!promptText) setInput("");
+    if (!promptText) {
+      setInput("");
+      setAttachedPhoto(null);
+    }
     setErrorMsg("");
     setIsSending(true);
     onAppendMessages([userMsg]);
@@ -158,7 +205,9 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
       }>(
         "/api/ai/menu-consult",
         {
-          message: trimmed,
+          message: effectiveText,
+          imageBase64: photoSnapshot?.base64,
+          imageMimeType: photoSnapshot?.mimeType,
           history: [...messages, userMsg]
             .slice(-8)
             .map((m) => ({ role: m.role, text: m.text })),
@@ -194,7 +243,7 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
           },
         },
         {
-          timeoutMs: 38000,
+          timeoutMs: 50000,
           fallbackError: "Gagal menghubungi asisten menu harian.",
         }
       );
@@ -252,8 +301,7 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
               Konsultan Penyesuaian Menu Harian (Warteg & Restoran)
             </h2>
             <p className="text-xs text-[#64748B] dark:text-emerald-200/75 leading-relaxed">
-              Menu rekomendasi tidak tersedia di tempat makan? Tanyakan pilihan lauk pengganti
-              sesuai{" "}
+              Foto etalase warteg, buku menu, atau tulis lauk yang tersedia agar disesuaikan dengan{" "}
               <strong className="font-mono tabular-nums text-[#10B981] dark:text-[#34D399]">
                 sisa {todaySummary.remainingCalories.toLocaleString("id-ID")} kkal
               </strong>{" "}
@@ -369,6 +417,12 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
                       : "bg-[#F8FAFC] dark:bg-[#102A20] border border-emerald-100 dark:border-emerald-800/70 text-[#0F172A] dark:text-[#ECFDF5] rounded-2xl rounded-tl-sm px-4 py-3 text-xs sm:text-sm"
                   }`}
                 >
+                  {isUser && msg.hasPhoto && (
+                    <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-300 dark:text-[#062216]">
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Foto etalase / menu dilampirkan</span>
+                    </div>
+                  )}
                   <div className="whitespace-pre-line leading-relaxed">{msg.text}</div>
 
                   {!isUser && msg.suggestedMeal && (
@@ -457,6 +511,35 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
         </div>
       )}
 
+      {/* Attached Photo Preview Strip */}
+      {attachedPhoto && (
+        <div className="flex items-center justify-between gap-3 p-2.5 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-[#F8FAFC] dark:bg-[#102A20]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img
+              src={attachedPhoto.previewDataUrl}
+              alt="Pratinjau foto menu"
+              className="w-11 h-11 rounded-xl object-cover border border-emerald-200 dark:border-emerald-700 shrink-0"
+            />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-[#0F172A] dark:text-white truncate">
+                Foto siap dianalisis AI
+              </div>
+              <div className="text-[11px] text-[#64748B] dark:text-emerald-200/70 truncate">
+                {attachedPhoto.name}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAttachedPhoto(null)}
+            aria-label="Hapus lampiran foto"
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Input Bar */}
       <form
         onSubmit={(e) => {
@@ -466,18 +549,57 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
         className="flex items-center gap-2 pt-1"
       >
         <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleSelectPhoto}
+          className="hidden"
+        />
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleSelectPhoto}
+          className="hidden"
+        />
+        <button
+          type="button"
+          disabled={isSending || isCompressingPhoto}
+          onClick={() => cameraInputRef.current?.click()}
+          title="Ambil foto etalase warteg / menu"
+          aria-label="Ambil foto kamera"
+          className="h-11 w-11 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-[#F8FAFC] dark:bg-[#102A20] hover:bg-emerald-50 dark:hover:bg-[#143528] text-[#10B981] flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50"
+        >
+          {isCompressingPhoto ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Camera className="w-4 h-4" />
+          )}
+        </button>
+        <button
+          type="button"
+          disabled={isSending || isCompressingPhoto}
+          onClick={() => galleryInputRef.current?.click()}
+          title="Unggah foto menu / makanan dari galeri"
+          aria-label="Unggah foto dari galeri"
+          className="h-11 w-11 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-[#F8FAFC] dark:bg-[#102A20] hover:bg-emerald-50 dark:hover:bg-[#143528] text-[#334155] dark:text-emerald-200 flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50"
+        >
+          <ImagePlus className="w-4 h-4" />
+        </button>
+        <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           disabled={isSending}
-          placeholder="Sebutkan lauk di warteg/restoran yang tersedia (mis: ayam bakar, ikan lele, capcay, tahu)..."
-          className="flex-1 h-11 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-[#F8FAFC] dark:bg-[#071610] text-xs sm:text-sm text-[#0F172A] dark:text-white placeholder:text-slate-400 dark:placeholder:text-emerald-200/40 focus:outline-none focus:border-[#10B981] focus:bg-white dark:focus:bg-[#0B1F17]"
+          placeholder="Foto etalase atau sebutkan lauk yang ada (mis: ayam bakar, lele, capcay)..."
+          className="flex-1 min-w-0 h-11 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-[#F8FAFC] dark:bg-[#071610] text-xs sm:text-sm text-[#0F172A] dark:text-white placeholder:text-slate-400 dark:placeholder:text-emerald-200/40 focus:outline-none focus:border-[#10B981] focus:bg-white dark:focus:bg-[#0B1F17]"
         />
         <button
           type="submit"
-          disabled={isSending || !input.trim()}
+          disabled={isSending || (!input.trim() && !attachedPhoto)}
           aria-label="Kirim konsultasi menu harian"
-          className="h-11 px-4 rounded-2xl bg-gradient-to-r from-[#10B981] to-[#34D399] hover:from-[#059669] hover:to-[#10B981] disabled:opacity-50 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer shrink-0"
+          className="h-11 px-4 rounded-2xl bg-gradient-to-r from-[#10B981] to-[#34D399] hover:from-[#059669] hover:to-[#10B981] disabled:opacity-50 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer shrink-0 whitespace-nowrap"
         >
           {isSending ? (
             <Loader2 className="w-4 h-4 animate-spin" />

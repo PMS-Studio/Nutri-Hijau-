@@ -48,6 +48,7 @@ async function getGeminiClient() {
 function getFriendlyGeminiError(err: unknown): { status: number; message: string } {
   const raw = err instanceof Error ? err.message : String(err);
   const lower = raw.toLowerCase();
+  console.error("[Nutri Hijau AI Error]", raw.slice(0, 500));
   if (raw.includes("GEMINI_API_KEY")) {
     return {
       status: 500,
@@ -68,10 +69,25 @@ function getFriendlyGeminiError(err: unknown): { status: number; message: string
         "Layanan AI membutuhkan waktu terlalu lama untuk merespons. Silakan coba lagi atau ringkas permintaan Anda.",
     };
   }
-  if (raw.includes("PERMISSION_DENIED") || raw.includes("API_KEY_INVALID") || raw.includes("403") || raw.includes("400")) {
+  if (
+    raw.includes("PERMISSION_DENIED") ||
+    raw.includes("API_KEY_INVALID") ||
+    raw.includes("403")
+  ) {
+    return {
+      status: 403,
+      message: "Kunci API Gemini tidak valid atau ditolak. Silakan periksa kunci API di panel Settings > Secrets.",
+    };
+  }
+  if (
+    raw.includes("INVALID_ARGUMENT") ||
+    raw.includes("400") ||
+    lower.includes("image")
+  ) {
     return {
       status: 400,
-      message: "Kunci API Gemini tidak valid atau ditolak. Silakan periksa kunci API di panel Settings > Secrets.",
+      message:
+        "Format gambar atau permintaan tidak dapat dibaca oleh AI. Pastikan foto berformat JPG/PNG yang jelas dan tidak rusak.",
     };
   }
   if (raw.includes("RESOURCE_EXHAUSTED") || raw.includes("429")) {
@@ -109,8 +125,8 @@ async function withGeminiRetry<T>(
   options: GeminiRetryOptions = {}
 ): Promise<T> {
   const maxRetries = options.maxRetries ?? 1;
-  const attemptTimeoutMs = options.attemptTimeoutMs ?? 20000;
-  const totalBudgetMs = options.totalBudgetMs ?? 24000;
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? 32000;
+  const totalBudgetMs = options.totalBudgetMs ?? 42000;
   const startedAt = Date.now();
   let lastError: unknown;
 
@@ -179,12 +195,44 @@ function parseJsonSafely<T>(rawText: string, fallback = "{}"): T {
   return JSON.parse(cleaned || fallback) as T;
 }
 
+function stripDataUrlPrefix(rawBase64: string): string {
+  const trimmed = rawBase64.trim();
+  const match = /^data:[^;]+;base64,(.+)$/i.exec(trimmed);
+  return (match ? match[1] : trimmed).trim();
+}
+
 interface EstimateFoodBody {
   description?: string;
   mealType?: string;
   userCategory?: string;
   isBreastfeeding?: boolean;
   medicalNotes?: string;
+}
+
+interface AnalyzeFoodPhotoBody {
+  imageBase64?: string;
+  mimeType?: string;
+  mealType?: string;
+  contextNote?: string;
+  userCategory?: string;
+  isBreastfeeding?: boolean;
+  medicalNotes?: string;
+}
+
+interface IngredientsToRecipesBody {
+  imageBase64?: string;
+  mimeType?: string;
+  preferenceNote?: string;
+  scope?: "personal" | "family";
+  profile?: CoachBody["profile"];
+  familyMembers?: Array<{
+    name: string;
+    relationRole: string;
+    age: number;
+    nutritionFocus: string;
+    dailyCalorieTarget: number;
+    medicalNotes?: string;
+  }>;
 }
 
 interface CoachBody {
@@ -238,6 +286,10 @@ interface WeeklyMealPlanBody {
   dietGoal?: string;
   budgetStyle?: string;
   preferencesNote?: string;
+  startDayNumber?: number;
+  daysCount?: number;
+  totalPlannedDays?: number;
+  avoidDishes?: string[];
   profile?: {
     name?: string;
     relationRole?: string;
@@ -273,6 +325,10 @@ interface FamilyMealPlanBody {
   familyName?: string;
   budgetStyle?: string;
   preferencesNote?: string;
+  startDayNumber?: number;
+  daysCount?: number;
+  totalPlannedDays?: number;
+  avoidDishes?: string[];
   members?: Array<{
     id: string;
     name: string;
@@ -290,6 +346,8 @@ interface FamilyMealPlanBody {
 
 interface MenuConsultBody {
   message?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
   history?: Array<{ role: "user" | "model"; text: string }>;
   venue?: string;
   selectedDayLabel?: string;
@@ -338,10 +396,356 @@ const BUDGET_LABELS: Record<string, string> = {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "6mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.post("/api/ai/analyze-food-photo", async (req, res) => {
+    try {
+      const body = (req.body || {}) as AnalyzeFoodPhotoBody;
+      const imageBase64 = stripDataUrlPrefix(body.imageBase64 || "");
+      const mimeType = body.mimeType || "image/jpeg";
+      if (!imageBase64) {
+        res.status(400).json({ error: "Mohon unggah atau ambil foto makanan terlebih dahulu." });
+        return;
+      }
+      if (!mimeType.startsWith("image/")) {
+        res.status(400).json({ error: "Format file gambar tidak didukung." });
+        return;
+      }
+
+      const { ai, Type, ThinkingLevel } = await getGeminiClient();
+      const categoryLabel = CATEGORY_LABELS[body.userCategory || ""] || "Pengguna Umum";
+      const mealType = body.mealType || "Makanan";
+      const contextNote = (body.contextNote || "").trim();
+      const medicalLine = body.medicalNotes?.trim()
+        ? `\nKondisi kesehatan/pantangan pengguna: ${body.medicalNotes.trim()}`
+        : "";
+
+      const imagePart = {
+        inlineData: {
+          mimeType,
+          data: imageBase64,
+        },
+      };
+      const textPart = {
+        text: `Analisis foto makanan (bisa berupa sepiring makanan warteg, RM Padang, restoran, kafe, atau masakan rumah) dan hitung estimasi gizi serta kalorinya.
+Waktu makan: ${mealType}
+Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" : ""}${medicalLine}${contextNote ? `\nCatatan tambahan pengguna: ${contextNote}` : ""}
+
+Identifikasi setiap lauk/komponen yang terlihat di piring atau menu foto (nasi, lauk utama, sayur, gorengan, kuah/sambal), perkirakan porsi visualnya, jumlahkan total kalori dan makronutrisinya secara konsisten dengan Atwater (4×karbo + 4×protein + 9×lemak), dan beri saran praktis bila ada penyesuaian porsi warteg/restoran.`,
+      };
+
+      const response = await withGeminiRetry(
+        (signal) =>
+          ai.models.generateContent({
+            model: "gemini-3.1-flash-lite",
+            contents: { parts: [imagePart, textPart] },
+            config: {
+              abortSignal: signal,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+              systemInstruction:
+                "Anda adalah Ahli Gizi Klinis & Spesialis Analisis Visual Pangan Indonesia (TKPI Kemenkes RI & USDA). Baca isi foto makanan warteg, RM Padang, restoran, maupun masakan rumah dengan teliti. Rinci setiap lauk/komponen yang tampak di foto beserta perkiraan porsi dan kalorinya, jaga konsistensi Atwater, dan beri saran gizi praktis dalam Bahasa Indonesia.",
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  foodName: {
+                    type: Type.STRING,
+                    description: "Nama ringkas kombinasi makanan pada foto dalam Bahasa Indonesia.",
+                  },
+                  portionNote: {
+                    type: Type.STRING,
+                    description: "Ringkasan takaran porsi visual, misal '1 piring lengkap (~420g)'.",
+                  },
+                  calories: { type: Type.INTEGER },
+                  carbs: { type: Type.NUMBER },
+                  protein: { type: Type.NUMBER },
+                  fat: { type: Type.NUMBER },
+                  assumptions: {
+                    type: Type.STRING,
+                    description: "Asumsi minyak goreng, santan, kuah, atau ukuran porsi visual.",
+                  },
+                  calorieRange: { type: Type.STRING },
+                  confidenceLevel: {
+                    type: Type.STRING,
+                    description: "Salah satu dari: 'tinggi', 'sedang', atau 'perkiraan_kasar'.",
+                  },
+                  nutritionTip: {
+                    type: Type.STRING,
+                    description: "Saran gizi & penyesuaian porsi 1-2 kalimat sesuai profil pengguna.",
+                  },
+                  detectedItems: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        portion: { type: Type.STRING },
+                        calories: { type: Type.INTEGER },
+                        protein: { type: Type.NUMBER },
+                      },
+                      required: ["name", "portion", "calories", "protein"],
+                    },
+                  },
+                },
+                required: [
+                  "foodName",
+                  "portionNote",
+                  "calories",
+                  "carbs",
+                  "protein",
+                  "fat",
+                  "assumptions",
+                  "calorieRange",
+                  "confidenceLevel",
+                  "nutritionTip",
+                  "detectedItems",
+                ],
+              },
+            },
+          }),
+        { attemptTimeoutMs: 32000, totalBudgetMs: 42000 }
+      );
+
+      const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
+      const carbs = Math.max(0, Math.round((Number(parsed.carbs) || 0) * 10) / 10);
+      const protein = Math.max(0, Math.round((Number(parsed.protein) || 0) * 10) / 10);
+      const fat = Math.max(0, Math.round((Number(parsed.fat) || 0) * 10) / 10);
+      const rawCalories = Math.max(0, Math.round(Number(parsed.calories) || 0));
+      const atwaterKcal = Math.round(carbs * 4 + protein * 4 + fat * 9);
+      const finalCalories =
+        atwaterKcal > 0 && (rawCalories === 0 || Math.abs(rawCalories - atwaterKcal) / atwaterKcal > 0.12)
+          ? atwaterKcal
+          : rawCalories;
+
+      const rawConf = String(parsed.confidenceLevel || "sedang");
+      const confidenceLevel =
+        rawConf === "tinggi" || rawConf === "perkiraan_kasar" ? rawConf : "sedang";
+
+      const rawItems = Array.isArray(parsed.detectedItems) ? parsed.detectedItems : [];
+      const detectedItems = rawItems
+        .map((it: Record<string, unknown>) => ({
+          name: String(it.name || "").trim(),
+          portion: String(it.portion || "1 porsi").trim(),
+          calories: Math.max(0, Math.round(Number(it.calories) || 0)),
+          protein: Math.max(0, Math.round((Number(it.protein) || 0) * 10) / 10),
+        }))
+        .filter((it: { name: string }) => Boolean(it.name));
+
+      res.json({
+        foodName: String(parsed.foodName || "Hidangan dari Foto"),
+        portionNote: String(parsed.portionNote || "1 porsi"),
+        calories: finalCalories,
+        carbs,
+        protein,
+        fat,
+        assumptions: String(parsed.assumptions || ""),
+        calorieRange: String(
+          parsed.calorieRange ||
+            `${Math.round(finalCalories * 0.9)}–${Math.round(finalCalories * 1.1)} kkal`
+        ),
+        confidenceLevel,
+        nutritionTip: String(parsed.nutritionTip || ""),
+        detectedItems,
+      });
+    } catch (err) {
+      const friendly = getFriendlyGeminiError(err);
+      res.status(friendly.status).json({ error: friendly.message });
+    }
+  });
+
+  app.post("/api/ai/ingredients-to-recipes", async (req, res) => {
+    try {
+      const body = (req.body || {}) as IngredientsToRecipesBody;
+      const imageBase64 = stripDataUrlPrefix(body.imageBase64 || "");
+      const mimeType = body.mimeType || "image/jpeg";
+      if (!imageBase64) {
+        res.status(400).json({ error: "Mohon unggah atau ambil foto bahan belanjaan terlebih dahulu." });
+        return;
+      }
+      if (!mimeType.startsWith("image/")) {
+        res.status(400).json({ error: "Format file gambar tidak didukung." });
+        return;
+      }
+
+      const { ai, Type, ThinkingLevel } = await getGeminiClient();
+      const profile = body.profile || {};
+      const categoryLabel = CATEGORY_LABELS[profile.category || ""] || "Dewasa";
+      const focusLabel = FOCUS_LABELS[profile.nutritionFocus || ""] || "Gizi Seimbang";
+      const scope = body.scope === "family" ? "family" : "personal";
+      const prefNote = (body.preferenceNote || "").trim();
+
+      const familyContext =
+        scope === "family" && Array.isArray(body.familyMembers) && body.familyMembers.length > 0
+          ? `Mode Keluarga (${body.familyMembers.length} anggota):\n${body.familyMembers
+              .map(
+                (m) =>
+                  `- ${m.name} (${m.relationRole}, ${m.age} thn · Fokus ${FOCUS_LABELS[m.nutritionFocus] || m.nutritionFocus} · ${m.dailyCalorieTarget} kkal${m.medicalNotes ? ` · Catatan: ${m.medicalNotes}` : ""})`
+              )
+              .join("\n")}`
+          : `Mode Personal: ${profile.name || "Pengguna"} (${categoryLabel}${profile.isBreastfeeding ? ", Menyusui" : ""}, Fokus: ${focusLabel}, Target ${profile.dailyCalorieTarget ?? 1800} kkal/hari${profile.medicalNotes ? `, Catatan medis/pantangan: ${profile.medicalNotes}` : ""})`;
+
+      const imagePart = {
+        inlineData: {
+          mimeType,
+          data: imageBase64,
+        },
+      };
+      const textPart = {
+        text: `Baca semua bahan makanan/belanjaan/isi kulkas yang tampak pada foto ini, lalu buatkan 4 ANEKA REKOMENDASI MASAKAN INDONESIA yang sehat, praktis, dan bervariasi dari bahan tersebut.
+
+${familyContext}
+${prefNote ? `Permintaan tambahan pengguna: ${prefNote}` : ""}
+
+Ketentuan Wajib:
+1. Sebutkan daftar bahan yang terbaca di foto (detectedIngredients).
+2. Buatkan tepat 4 ide masakan yang berbeda teknik masaknya (misal: berkuah bening/sup, tumisan sehat, pepes/kukus/panggang, dan menu sarapan/camilan padat gizi).
+3. Pastikan estimasi gizi per porsi tiap masakan akurat (Atwater: 4×carbs + 4×protein + 9×fat) dan aman untuk pantangan/profil pengguna atau keluarga.`,
+      };
+
+      const validMealTypes = new Set(["sarapan", "makan_siang", "makan_malam", "camilan"]);
+
+      const response = await withGeminiRetry(
+        (signal) =>
+          ai.models.generateContent({
+            model: "gemini-3.1-flash-lite",
+            contents: { parts: [imagePart, textPart] },
+            config: {
+              abortSignal: signal,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+              systemInstruction:
+                "Anda adalah Ahli Gizi & Chef Masakan Rumah Indonesia Nutri Hijau. Identifikasi bahan belanjaan atau isi kulkas dari foto secara akurat, lalu rancang aneka ide masakan Indonesia yang lezat, hemat, bergizi seimbang (Isi Piringku), serta aman bagi seluruh profil kesehatan pengguna.",
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  summary: {
+                    type: Type.STRING,
+                    description: "Ringkasan 1-2 kalimat mengenai bahan yang ditemukan dan potensi gizinya.",
+                  },
+                  detectedIngredients: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  storageTip: {
+                    type: Type.STRING,
+                    description: "1 kalimat tips penyimpanan atau persiapan bahan agar tetap segar.",
+                  },
+                  recipes: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        title: { type: Type.STRING },
+                        cookingTimeMinutes: { type: Type.INTEGER },
+                        mealType: {
+                          type: Type.STRING,
+                          description: "Salah satu: sarapan, makan_siang, makan_malam, camilan",
+                        },
+                        portionNote: { type: Type.STRING },
+                        calories: { type: Type.INTEGER },
+                        carbs: { type: Type.NUMBER },
+                        protein: { type: Type.NUMBER },
+                        fat: { type: Type.NUMBER },
+                        ingredientsUsed: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                        },
+                        extraPantryItems: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                        },
+                        cookingSteps: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                        },
+                        nutritionAdaptationNote: { type: Type.STRING },
+                      },
+                      required: [
+                        "title",
+                        "cookingTimeMinutes",
+                        "mealType",
+                        "portionNote",
+                        "calories",
+                        "carbs",
+                        "protein",
+                        "fat",
+                        "ingredientsUsed",
+                        "extraPantryItems",
+                        "cookingSteps",
+                        "nutritionAdaptationNote",
+                      ],
+                    },
+                  },
+                },
+                required: ["summary", "detectedIngredients", "storageTip", "recipes"],
+              },
+            },
+          }),
+        { attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+      );
+
+      const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
+      const rawIngredients = Array.isArray(parsed.detectedIngredients)
+        ? parsed.detectedIngredients.map((x) => String(x).trim()).filter(Boolean)
+        : [];
+      const rawRecipes = Array.isArray(parsed.recipes) ? parsed.recipes : [];
+
+      const recipes = rawRecipes
+        .slice(0, 5)
+        .map((r: Record<string, unknown>) => {
+          const carbs = Math.max(0, Math.round((Number(r.carbs) || 0) * 10) / 10);
+          const protein = Math.max(0, Math.round((Number(r.protein) || 0) * 10) / 10);
+          const fat = Math.max(0, Math.round((Number(r.fat) || 0) * 10) / 10);
+          const rawCal = Math.max(0, Math.round(Number(r.calories) || 0));
+          const atwater = Math.round(carbs * 4 + protein * 4 + fat * 9);
+          const calories =
+            atwater > 0 && (rawCal === 0 || Math.abs(rawCal - atwater) / atwater > 0.12)
+              ? atwater
+              : rawCal;
+          const rawMt = String(r.mealType || "makan_siang");
+          return {
+            title: String(r.title || "Masakan Rumahan Seimbang").trim(),
+            cookingTimeMinutes: Math.max(5, Math.round(Number(r.cookingTimeMinutes) || 20)),
+            mealType: validMealTypes.has(rawMt) ? rawMt : "makan_siang",
+            portionNote: String(r.portionNote || "1 porsi saji").trim(),
+            calories,
+            carbs,
+            protein,
+            fat,
+            ingredientsUsed: Array.isArray(r.ingredientsUsed)
+              ? r.ingredientsUsed.map((x) => String(x).trim()).filter(Boolean)
+              : [],
+            extraPantryItems: Array.isArray(r.extraPantryItems)
+              ? r.extraPantryItems.map((x) => String(x).trim()).filter(Boolean)
+              : [],
+            cookingSteps: Array.isArray(r.cookingSteps)
+              ? r.cookingSteps.map((x) => String(x).trim()).filter(Boolean)
+              : [],
+            nutritionAdaptationNote: String(r.nutritionAdaptationNote || "").trim(),
+          };
+        })
+        .filter((r: { title: string }) => Boolean(r.title));
+
+      if (recipes.length === 0) {
+        throw new Error("Gagal menyusun rekomendasi resep dari foto belanjaan.");
+      }
+
+      res.json({
+        summary: String(parsed.summary || "Bahan makanan dari foto berhasil diidentifikasi."),
+        detectedIngredients: rawIngredients,
+        storageTip: String(
+          parsed.storageTip || "Simpan sayuran daun dan protein secara terpisah agar tetap segar."
+        ),
+        recipes,
+      });
+    } catch (err) {
+      const friendly = getFriendlyGeminiError(err);
+      res.status(friendly.status).json({ error: friendly.message });
+    }
   });
 
   app.post("/api/ai/estimate-food", async (req, res) => {
@@ -363,14 +767,14 @@ async function startServer() {
       const response = await withGeminiRetry(
         (signal) =>
           ai.models.generateContent({
-            model: "gemini-4-hydrogen",
+            model: "gemini-3.1-flash-lite",
             contents: `Perkirakan kandungan gizi dan kalori untuk makanan berikut:
 Deskripsi makanan: "${description}"
 Waktu makan: ${mealType}
 Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" : ""}${medicalLine}`,
             config: {
               abortSignal: signal,
-              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
               systemInstruction:
               "Anda adalah ahli gizi klinis Indonesia yang berpedoman pada TKPI (Tabel Komposisi Pangan Indonesia Kemenkes RI) dan USDA FoodData Central. Perkirakan kalori (kkal) serta makronutrisi (karbohidrat, protein, lemak dalam gram) secara akurat dan realistis untuk makanan Indonesia maupun internasional. Pastikan total kalori konsisten dengan prinsip Atwater (4×karbohidrat + 4×protein + 9×lemak). Sertakan asumsi berat/bahan agar transparan (misalnya minyak goreng, santan, ukuran potong), rentang variasi kalori yang wajar, dan tingkat keyakinan estimasi ('tinggi' jika ukuran/berat spesifik disebut jelas, 'sedang' untuk porsi rumah tangga standar, 'perkiraan_kasar' jika deskripsi sangat umum). Jika pengguna mencantumkan kondisi kesehatan, sesuaikan saran gizi singkat secara aman.",
             responseMimeType: "application/json",
@@ -433,7 +837,7 @@ Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" :
             },
           },
         }),
-        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
+        { attemptTimeoutMs: 32000, totalBudgetMs: 42000 }
       );
 
       const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
@@ -552,7 +956,7 @@ Aturan Akurasi & Keamanan:
 2. Selaraskan angka kalori dan target protein yang Anda sebutkan dengan profil di atas—jangan mengarang target kalori baru yang bertentangan.
 3. Jika pengguna menanyakan menu bersama untuk sekeluarga, bantu adaptasikan porsi/modifikasi ringan dari masakan yang sama agar praktis dimasak di rumah untuk semua anggota keluarga.
 4. Jangan membuat klaim medis absolut atau menggantikan diagnosis dokter. Jika pertanyaan menyangkut keluhan medis serius, sarankan konsultasi langsung ke dokter atau ahli gizi klinis (Sp.GK / RD).
-5. Format jawaban ringkas menggunakan poin bernomor atau daftar bullet agar mudah dipindai.`;
+5. Tulis jawaban yang SINGKAT, PADAT, dan langsung ke inti (maksimal ~140 kata atau 3–5 poin bullet/bernomor pendek) agar cepat dipindai, kecuali pengguna meminta penjelasan rinci.`;
 
       const historyContents = (body.history || []).slice(-10).map((item) => ({
         role: item.role === "model" ? "model" : "user",
@@ -562,18 +966,18 @@ Aturan Akurasi & Keamanan:
       const response = await withGeminiRetry(
         (signal) =>
           ai.models.generateContent({
-            model: "gemini-4-hydrogen",
+            model: "gemini-3.1-flash-lite",
             contents: [
               ...historyContents,
               { role: "user", parts: [{ text: message }] },
             ],
             config: {
               abortSignal: signal,
-              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
               systemInstruction,
             },
           }),
-        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
+        { attemptTimeoutMs: 32000, totalBudgetMs: 42000 }
       );
 
       const replyText = (response.text || "").trim();
@@ -686,37 +1090,70 @@ ${clinicalGuardrail}`;
         required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
       };
 
+      const startDay = Math.max(1, Math.round(Number(body.startDayNumber) || 1));
+      const daysCount = Math.min(9, Math.max(1, Math.round(Number(body.daysCount) || 7)));
+      const totalPlannedDays = Math.max(
+        daysCount,
+        Math.round(Number(body.totalPlannedDays) || daysCount)
+      );
+      const dayNamesCycle = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
+      const expectedDays = Array.from({ length: daysCount }, (_, i) => {
+        const dayNum = startDay + i;
+        return {
+          dayNumber: dayNum,
+          dayName: dayNamesCycle[(dayNum - 1) % 7],
+        };
+      });
+      const firstSplitCount = Math.ceil(daysCount / 2);
+      const firstBatchDays = expectedDays.slice(0, firstSplitCount);
+      const secondBatchDays = expectedDays.slice(firstSplitCount);
+      const avoidList = Array.isArray(body.avoidDishes)
+        ? body.avoidDishes.map((s) => String(s).trim()).filter(Boolean).slice(-24)
+        : [];
+      const avoidClause =
+        avoidList.length > 0
+          ? `\n- Variasi Wajib: Hindari mengulang hidangan persis seperti minggu sebelumnya (${avoidList.join(", ")}). Buat kombinasi lauk & masakan baru yang tetap ekonomis dan sesuai selera Indonesia.`
+          : "";
+
       const systemInstruction =
         "Anda adalah ahli gizi klinis bersertifikat di Indonesia yang berpedoman pada TKPI Kemenkes RI, Pedoman Gizi Seimbang (Isi Piringku), dan prinsip Atwater. Hasilkan rencana menu yang praktis, lezat, realistis dimasak/dibeli di Indonesia, akurat secara matematis, dan sepenuhnya aman bagi profil kesehatan pengguna.";
 
-      const promptPart1 = `Susunkan menu diet HARI 1–4 (Senin, Selasa, Rabu, Kamis) untuk klien berikut:
-${baseProfileContext}
+      const formatDayList = (items: Array<{ dayNumber: number; dayName: string }>) =>
+        items.map((d) => `dayNumber ${d.dayNumber} ("${d.dayName}")`).join(", ");
+
+      const shoppingListSchema = {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            category: { type: Type.STRING },
+            items: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["category", "items"],
+        },
+      };
+
+      let parsedPart1: Record<string, unknown> = {};
+      let parsedPart2: Record<string, unknown> = {};
+
+      if (secondBatchDays.length === 0) {
+        const singlePrompt = `Susunkan menu diet HARI ${firstBatchDays[0].dayNumber} (bagian dari program ${totalPlannedDays} hari) + daftar belanja singkat untuk klien berikut:
+${baseProfileContext}${avoidClause}
 
 Ketentuan:
-1. Buat tepat 4 hari berurutan: dayNumber 1..4 dengan dayName persis "Senin", "Selasa", "Rabu", "Kamis".
+1. Buat tepat ${firstBatchDays.length} hari persis: ${formatDayList(firstBatchDays)}.
 2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
 3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
-4. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
+4. Sertakan shoppingList terkelompok rapi (Protein, Sayur & Buah, Karbohidrat & Bumbu) serta tulis semua catatan secara ringkas & padat (1 kalimat pendek).`;
 
-      const promptPart2 = `Susunkan menu diet HARI 5–7 (Jumat, Sabtu, Minggu) + daftar belanja mingguan lengkap (7 hari) untuk klien berikut:
-${baseProfileContext}
-
-Ketentuan:
-1. Buat tepat 3 hari berurutan: dayNumber 5..7 dengan dayName persis "Jumat", "Sabtu", "Minggu", dengan variasi lauk berbeda agar tidak membosankan.
-2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
-3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
-4. Sertakan shoppingList mingguan terkelompok rapi (Protein, Sayur & Buah, Karbohidrat & Bumbu) untuk kebutuhan seminggu.
-5. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
-
-      const [resPart1, resPart2] = await Promise.all([
-        withGeminiRetry(
+        const singleRes = await withGeminiRetry(
           (signal) =>
             ai.models.generateContent({
-              model: "gemini-4-hydrogen",
-              contents: promptPart1,
+              model: "gemini-3.1-flash-lite",
+              contents: singlePrompt,
               config: {
                 abortSignal: signal,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                 systemInstruction,
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -726,64 +1163,109 @@ Ketentuan:
                     nutritionistSummary: { type: Type.STRING },
                     safetyReminder: { type: Type.STRING },
                     days: { type: Type.ARRAY, items: daySchema },
+                    shoppingList: shoppingListSchema,
                   },
-                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days", "shoppingList"],
                 },
               },
             }),
-          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 25000 }
-        ),
-        withGeminiRetry(
-          (signal) =>
-            ai.models.generateContent({
-              model: "gemini-4-hydrogen",
-              contents: promptPart2,
-              config: {
-                abortSignal: signal,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                systemInstruction,
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    days: { type: Type.ARRAY, items: daySchema },
-                    shoppingList: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          category: { type: Type.STRING },
-                          items: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        },
-                        required: ["category", "items"],
-                      },
-                    },
-                  },
-                  required: ["days", "shoppingList"],
-                },
-              },
-            }),
-          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 25000 }
-        ),
-      ]);
+          { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+        );
+        parsedPart1 = parseJsonSafely<Record<string, unknown>>(singleRes.text || "{}");
+        parsedPart2 = { shoppingList: parsedPart1.shoppingList };
+      } else {
+        const promptPart1 = `Susunkan menu diet HARI ${firstBatchDays[0].dayNumber}–${firstBatchDays[firstBatchDays.length - 1].dayNumber} (bagian dari program ${totalPlannedDays} hari) untuk klien berikut:
+${baseProfileContext}${avoidClause}
 
-      const parsedPart1 = parseJsonSafely<Record<string, unknown>>(resPart1.text || "{}");
-      const parsedPart2 = parseJsonSafely<Record<string, unknown>>(resPart2.text || "{}");
+Ketentuan:
+1. Buat tepat ${firstBatchDays.length} hari berurutan persis: ${formatDayList(firstBatchDays)}.
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
+4. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
+
+        const promptPart2 = `Susunkan menu diet HARI ${secondBatchDays[0].dayNumber}–${secondBatchDays[secondBatchDays.length - 1].dayNumber} + daftar belanja untuk periode ini (bagian dari program ${totalPlannedDays} hari) untuk klien berikut:
+${baseProfileContext}${avoidClause}
+
+Ketentuan:
+1. Buat tepat ${secondBatchDays.length} hari berurutan persis: ${formatDayList(secondBatchDays)}, dengan variasi lauk berbeda dari hari-hari sebelumnya.
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
+4. Sertakan shoppingList terkelompok rapi (Protein, Sayur & Buah, Karbohidrat & Bumbu) untuk kebutuhan ${daysCount} hari ini.
+5. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
+
+        const [resPart1, resPart2] = await Promise.all([
+          withGeminiRetry(
+            (signal) =>
+              ai.models.generateContent({
+                model: "gemini-3.1-flash-lite",
+                contents: promptPart1,
+                config: {
+                  abortSignal: signal,
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                  systemInstruction,
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      planTitle: { type: Type.STRING },
+                      nutritionistSummary: { type: Type.STRING },
+                      safetyReminder: { type: Type.STRING },
+                      days: { type: Type.ARRAY, items: daySchema },
+                    },
+                    required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                  },
+                },
+              }),
+            { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+          ),
+          withGeminiRetry(
+            (signal) =>
+              ai.models.generateContent({
+                model: "gemini-3.1-flash-lite",
+                contents: promptPart2,
+                config: {
+                  abortSignal: signal,
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                  systemInstruction,
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      days: { type: Type.ARRAY, items: daySchema },
+                      shoppingList: shoppingListSchema,
+                    },
+                    required: ["days", "shoppingList"],
+                  },
+                },
+              }),
+            { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+          ),
+        ]);
+
+        parsedPart1 = parseJsonSafely<Record<string, unknown>>(resPart1.text || "{}");
+        parsedPart2 = parseJsonSafely<Record<string, unknown>>(resPart2.text || "{}");
+      }
+
+      const rawPart1Days = Array.isArray(parsedPart1.days) ? parsedPart1.days : [];
+      const rawPart2Days = Array.isArray(parsedPart2.days) ? parsedPart2.days : [];
+      const alignedDayPairs: Array<{ expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> }> = [
+        ...firstBatchDays
+          .map((expected, i) => ({ expected, d: rawPart1Days[i] as Record<string, unknown> | undefined }))
+          .filter((x): x is { expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> } => Boolean(x.d)),
+        ...secondBatchDays
+          .map((expected, i) => ({ expected, d: rawPart2Days[i] as Record<string, unknown> | undefined }))
+          .filter((x): x is { expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> } => Boolean(x.d)),
+      ];
+
       const parsed: Record<string, unknown> = {
         ...parsedPart1,
-        days: [
-          ...(Array.isArray(parsedPart1.days) ? parsedPart1.days.slice(0, 4) : []),
-          ...(Array.isArray(parsedPart2.days) ? parsedPart2.days.slice(0, 3) : []),
-        ],
         shoppingList: parsedPart2.shoppingList,
       };
 
-      const dayNamesFallback = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
       const mealOrder = ["sarapan", "makan_siang", "makan_malam", "camilan"] as const;
       const validMealTypes = new Set<string>(mealOrder);
 
-      const rawDays = Array.isArray(parsed.days) ? parsed.days : [];
-      const normalizedDays = rawDays.slice(0, 7).map((d: Record<string, unknown>, idx: number) => {
+      const normalizedDays = alignedDayPairs.map(({ expected, d }) => {
         const rawMeals = Array.isArray(d.meals) ? d.meals : [];
         let meals = rawMeals.map((m: Record<string, unknown>, mIdx: number) => {
           const rawMt = String(m.mealType || mealOrder[mIdx % 4]);
@@ -810,14 +1292,12 @@ Ketentuan:
           };
         });
 
-        // Sort consistently by Sarapan -> Makan Siang -> Makan Malam -> Camilan
         meals.sort(
           (a, b) => mealOrder.indexOf(a.mealType as (typeof mealOrder)[number]) - mealOrder.indexOf(b.mealType as (typeof mealOrder)[number])
         );
 
         let totalCalories = meals.reduce((sum, item) => sum + item.calories, 0);
 
-        // Proportional calorie calibration safeguard if day total drifts >12% from clinical target
         if (totalCalories > 0 && Math.abs(totalCalories - targetCalories) / targetCalories > 0.12) {
           const rawRatio = targetCalories / totalCalories;
           const scale = Math.max(0.7, Math.min(1.4, rawRatio));
@@ -846,8 +1326,8 @@ Ketentuan:
         const totalFat = Math.round(meals.reduce((sum, item) => sum + item.fat, 0));
 
         return {
-          dayNumber: Number(d.dayNumber) || idx + 1,
-          dayName: String(d.dayName || dayNamesFallback[idx] || `Hari ${idx + 1}`),
+          dayNumber: expected.dayNumber,
+          dayName: expected.dayName,
           dailyTheme: String(d.dailyTheme || "Menu Gizi Seimbang"),
           dailyTip: String(d.dailyTip || "Konsumsi air putih cukup di sela waktu makan."),
           meals,
@@ -859,7 +1339,7 @@ Ketentuan:
       });
 
       if (normalizedDays.length === 0) {
-        throw new Error("Format menu mingguan tidak lengkap.");
+        throw new Error("Format menu tidak lengkap.");
       }
 
       const weeklyAverageCalories = Math.round(
@@ -886,7 +1366,8 @@ Ketentuan:
         medicalNotesSnapshot: profile.medicalNotes?.trim() || "",
         targetCaloriesPerDay: targetCalories,
         weeklyAverageCalories,
-        planTitle: String(parsed.planTitle || `Menu Diet 7 Hari (${targetCalories} kkal/hari)`),
+        durationDays: totalPlannedDays,
+        planTitle: String(parsed.planTitle || `Rencana Menu ${totalPlannedDays} Hari (${targetCalories} kkal/hari)`),
         nutritionistSummary: String(parsed.nutritionistSummary || ""),
         safetyReminder: String(parsed.safetyReminder || ""),
         days: normalizedDays,
@@ -977,37 +1458,70 @@ Tujuan: Satu hidangan induk keluarga per waktu makan agar dapur praktis, diserta
         required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
       };
 
+      const startDay = Math.max(1, Math.round(Number(body.startDayNumber) || 1));
+      const daysCount = Math.min(9, Math.max(1, Math.round(Number(body.daysCount) || 7)));
+      const totalPlannedDays = Math.max(
+        daysCount,
+        Math.round(Number(body.totalPlannedDays) || daysCount)
+      );
+      const dayNamesCycle = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
+      const expectedDays = Array.from({ length: daysCount }, (_, i) => {
+        const dayNum = startDay + i;
+        return {
+          dayNumber: dayNum,
+          dayName: dayNamesCycle[(dayNum - 1) % 7],
+        };
+      });
+      const firstSplitCount = Math.ceil(daysCount / 2);
+      const firstBatchDays = expectedDays.slice(0, firstSplitCount);
+      const secondBatchDays = expectedDays.slice(firstSplitCount);
+      const avoidList = Array.isArray(body.avoidDishes)
+        ? body.avoidDishes.map((s) => String(s).trim()).filter(Boolean).slice(-24)
+        : [];
+      const avoidClause =
+        avoidList.length > 0
+          ? `\n- Variasi Wajib: Hindari mengulang hidangan persis seperti minggu sebelumnya (${avoidList.join(", ")}). Susun variasi hidangan keluarga Nusantara baru yang praktis.`
+          : "";
+
+      const formatFamDays = (items: Array<{ dayNumber: number; dayName: string }>) =>
+        items.map((d) => `dayNumber ${d.dayNumber} ("${d.dayName}")`).join(", ");
+
       const familySystemInstruction =
         "Anda adalah ahli gizi keluarga bersertifikat di Indonesia (berpedoman pada TKPI Kemenkes RI & Pedoman Gizi Seimbang Isi Piringku). Anda merancang satu menu keluarga yang harmonis, lezat, mudah dimasak di rumah, sekaligus presisi dalam membagi takaran porsi per anggota keluarga.";
 
-      const familyPromptPart1 = `Susunkan menu masak keluarga HARI 1–4 (Senin, Selasa, Rabu, Kamis) untuk:
-${familyContextBlock}
+      const famShoppingSchema = {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            category: { type: Type.STRING },
+            items: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["category", "items"],
+        },
+      };
+
+      let parsedFamPart1: Record<string, unknown> = {};
+      let parsedFamPart2: Record<string, unknown> = {};
+
+      if (secondBatchDays.length === 0) {
+        const singleFamPrompt = `Susunkan menu masak keluarga HARI ${firstBatchDays[0].dayNumber} (program ${totalPlannedDays} hari) + daftar belanja gabungan untuk:
+${familyContextBlock}${avoidClause}
 
 Ketentuan:
-1. Buat tepat 4 hari: dayNumber 1..4 dengan dayName "Senin", "Selasa", "Rabu", "Kamis".
+1. Buat tepat ${firstBatchDays.length} hari persis: ${formatFamDays(firstBatchDays)}.
 2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
 3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
-4. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
+4. Sertakan shoppingList terkelompok untuk ${members.length} orang dan tulis catatan secara singkat & padat (maks 1 kalimat pendek).`;
 
-      const familyPromptPart2 = `Susunkan menu masak keluarga HARI 5–7 (Jumat, Sabtu, Minggu) + daftar belanja mingguan gabungan (7 hari) untuk:
-${familyContextBlock}
-
-Ketentuan:
-1. Buat tepat 3 hari: dayNumber 5..7 dengan dayName "Jumat", "Sabtu", "Minggu" (lauk bervariasi).
-2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
-3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
-4. Sertakan shoppingList mingguan terkelompok (Protein Hewani, Protein Nabati, Sayur & Buah, Bumbu & Pokok) untuk ${members.length} orang selama 7 hari.
-5. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
-
-      const [resFamPart1, resFamPart2] = await Promise.all([
-        withGeminiRetry(
+        const singleFamRes = await withGeminiRetry(
           (signal) =>
             ai.models.generateContent({
-              model: "gemini-4-hydrogen",
-              contents: familyPromptPart1,
+              model: "gemini-3.1-flash-lite",
+              contents: singleFamPrompt,
               config: {
                 abortSignal: signal,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                 systemInstruction: familySystemInstruction,
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -1017,63 +1531,108 @@ Ketentuan:
                     nutritionistSummary: { type: Type.STRING },
                     safetyReminder: { type: Type.STRING },
                     days: { type: Type.ARRAY, items: familyDaySchema },
+                    shoppingList: famShoppingSchema,
                   },
-                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days", "shoppingList"],
                 },
               },
             }),
-          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 26000 }
-        ),
-        withGeminiRetry(
-          (signal) =>
-            ai.models.generateContent({
-              model: "gemini-4-hydrogen",
-              contents: familyPromptPart2,
-              config: {
-                abortSignal: signal,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                systemInstruction: familySystemInstruction,
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    days: { type: Type.ARRAY, items: familyDaySchema },
-                    shoppingList: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          category: { type: Type.STRING },
-                          items: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        },
-                        required: ["category", "items"],
-                      },
-                    },
-                  },
-                  required: ["days", "shoppingList"],
-                },
-              },
-            }),
-          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 26000 }
-        ),
-      ]);
+          { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+        );
+        parsedFamPart1 = parseJsonSafely<Record<string, unknown>>(singleFamRes.text || "{}");
+        parsedFamPart2 = { shoppingList: parsedFamPart1.shoppingList };
+      } else {
+        const familyPromptPart1 = `Susunkan menu masak keluarga HARI ${firstBatchDays[0].dayNumber}–${firstBatchDays[firstBatchDays.length - 1].dayNumber} (program ${totalPlannedDays} hari) untuk:
+${familyContextBlock}${avoidClause}
 
-      const parsedFamPart1 = parseJsonSafely<Record<string, unknown>>(resFamPart1.text || "{}");
-      const parsedFamPart2 = parseJsonSafely<Record<string, unknown>>(resFamPart2.text || "{}");
+Ketentuan:
+1. Buat tepat ${firstBatchDays.length} hari berurutan persis: ${formatFamDays(firstBatchDays)}.
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
+4. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
+
+        const familyPromptPart2 = `Susunkan menu masak keluarga HARI ${secondBatchDays[0].dayNumber}–${secondBatchDays[secondBatchDays.length - 1].dayNumber} + daftar belanja gabungan (program ${totalPlannedDays} hari) untuk:
+${familyContextBlock}${avoidClause}
+
+Ketentuan:
+1. Buat tepat ${secondBatchDays.length} hari berurutan persis: ${formatFamDays(secondBatchDays)} (lauk bervariasi).
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
+4. Sertakan shoppingList terkelompok (Protein Hewani, Protein Nabati, Sayur & Buah, Bumbu & Pokok) untuk ${members.length} orang selama ${daysCount} hari ini.
+5. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
+
+        const [resFamPart1, resFamPart2] = await Promise.all([
+          withGeminiRetry(
+            (signal) =>
+              ai.models.generateContent({
+                model: "gemini-3.1-flash-lite",
+                contents: familyPromptPart1,
+                config: {
+                  abortSignal: signal,
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                  systemInstruction: familySystemInstruction,
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      planTitle: { type: Type.STRING },
+                      nutritionistSummary: { type: Type.STRING },
+                      safetyReminder: { type: Type.STRING },
+                      days: { type: Type.ARRAY, items: familyDaySchema },
+                    },
+                    required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                  },
+                },
+              }),
+            { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+          ),
+          withGeminiRetry(
+            (signal) =>
+              ai.models.generateContent({
+                model: "gemini-3.1-flash-lite",
+                contents: familyPromptPart2,
+                config: {
+                  abortSignal: signal,
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+                  systemInstruction: familySystemInstruction,
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      days: { type: Type.ARRAY, items: familyDaySchema },
+                      shoppingList: famShoppingSchema,
+                    },
+                    required: ["days", "shoppingList"],
+                  },
+                },
+              }),
+            { maxRetries: 1, attemptTimeoutMs: 36000, totalBudgetMs: 45000 }
+          ),
+        ]);
+
+        parsedFamPart1 = parseJsonSafely<Record<string, unknown>>(resFamPart1.text || "{}");
+        parsedFamPart2 = parseJsonSafely<Record<string, unknown>>(resFamPart2.text || "{}");
+      }
+
+      const rawFamPart1Days = Array.isArray(parsedFamPart1.days) ? parsedFamPart1.days : [];
+      const rawFamPart2Days = Array.isArray(parsedFamPart2.days) ? parsedFamPart2.days : [];
+      const alignedFamPairs: Array<{ expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> }> = [
+        ...firstBatchDays
+          .map((expected, i) => ({ expected, d: rawFamPart1Days[i] as Record<string, unknown> | undefined }))
+          .filter((x): x is { expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> } => Boolean(x.d)),
+        ...secondBatchDays
+          .map((expected, i) => ({ expected, d: rawFamPart2Days[i] as Record<string, unknown> | undefined }))
+          .filter((x): x is { expected: { dayNumber: number; dayName: string }; d: Record<string, unknown> } => Boolean(x.d)),
+      ];
+
       const parsed: Record<string, unknown> = {
         ...parsedFamPart1,
-        days: [
-          ...(Array.isArray(parsedFamPart1.days) ? parsedFamPart1.days.slice(0, 4) : []),
-          ...(Array.isArray(parsedFamPart2.days) ? parsedFamPart2.days.slice(0, 3) : []),
-        ],
         shoppingList: parsedFamPart2.shoppingList,
       };
-      const dayNamesFallback = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
       const mealOrder = ["sarapan", "makan_siang", "makan_malam", "camilan"] as const;
       const validMealTypes = new Set<string>(mealOrder);
 
-      const rawDays = Array.isArray(parsed.days) ? parsed.days : [];
-      const normalizedDays = rawDays.slice(0, 7).map((d: Record<string, unknown>, idx: number) => {
+      const normalizedDays = alignedFamPairs.map(({ expected, d }) => {
         const rawMeals = Array.isArray(d.meals) ? d.meals : [];
         const meals = rawMeals.map((m: Record<string, unknown>, mIdx: number) => {
           const rawMt = String(m.mealType || mealOrder[mIdx % 4]);
@@ -1116,8 +1675,8 @@ Ketentuan:
         );
 
         return {
-          dayNumber: Number(d.dayNumber) || idx + 1,
-          dayName: String(d.dayName || dayNamesFallback[idx] || `Hari ${idx + 1}`),
+          dayNumber: expected.dayNumber,
+          dayName: expected.dayName,
           dailyTheme: String(d.dailyTheme || "Masakan Keluarga Seimbang"),
           dailyTip: String(d.dailyTip || "Sesuaikan porsi nasi dan lauk sesuai kebutuhan masing-masing anggota."),
           meals,
@@ -1125,7 +1684,7 @@ Ketentuan:
       });
 
       if (normalizedDays.length === 0) {
-        throw new Error("Format menu keluarga 7 hari tidak lengkap.");
+        throw new Error("Format menu keluarga tidak lengkap.");
       }
 
       const rawShopping = Array.isArray(parsed.shoppingList) ? parsed.shoppingList : [];
@@ -1145,7 +1704,8 @@ Ketentuan:
         budgetStyle,
         preferencesNote,
         memberIdsSnapshot: members.map((m) => m.id),
-        planTitle: String(parsed.planTitle || `Menu Keluarga 7 Hari — ${familyName}`),
+        durationDays: totalPlannedDays,
+        planTitle: String(parsed.planTitle || `Menu Keluarga ${totalPlannedDays} Hari — ${familyName}`),
         nutritionistSummary: String(parsed.nutritionistSummary || ""),
         safetyReminder: String(parsed.safetyReminder || ""),
         days: normalizedDays,
@@ -1161,9 +1721,15 @@ Ketentuan:
   app.post("/api/ai/menu-consult", async (req, res) => {
     try {
       const body = (req.body || {}) as MenuConsultBody;
-      const message = (body.message || "").trim();
+      const imageBase64 = stripDataUrlPrefix(body.imageBase64 || "");
+      const imageMimeType = body.imageMimeType || "image/jpeg";
+      const message =
+        (body.message || "").trim() ||
+        (imageBase64
+          ? "Tolong baca foto menu / makanan warteg atau restoran ini, hitung perkiraan kalori & nutrisinya, lalu rekomendasikan kombinasi terbaik untuk sisa kalori saya hari ini."
+          : "");
       if (!message) {
-        res.status(400).json({ error: "Mohon tuliskan menu yang tersedia atau pertanyaan Anda." });
+        res.status(400).json({ error: "Mohon tuliskan menu yang tersedia, pertanyaan Anda, atau lampirkan foto makanan/etalase." });
         return;
       }
 
@@ -1204,7 +1770,7 @@ Ketentuan:
                   `- ${m.mealType}: ${m.foodName} (${m.portionNote}, ~${m.calories} kkal)`
               )
               .join("\n")}`
-          : `Konteks Hari: ${body.selectedDayLabel || "Menu Harian Hari Ini"} (belum ada jadwal 7 hari tersimpan, fokus pada sisa anggaran kalori & makro hari ini).`;
+          : `Konteks Hari: ${body.selectedDayLabel || "Menu Harian Hari Ini"} (belum ada rencana menu tersimpan, fokus pada sisa anggaran kalori & makro hari ini).`;
 
       const loggedFoodsContext =
         Array.isArray(today.loggedFoods) && today.loggedFoods.length > 0
@@ -1235,24 +1801,37 @@ Tugas Anda:
 1. Berikan saran menu pengganti yang REALISTIS ada di tempat tersebut (atau pilih kombinasi terbaik dari daftar lauk yang disebut pengguna).
 2. Sebutkan takaran porsi praktis Indonesia (misal: nasi 1/2 porsi ~100g, tiriskan kuah/minyak, hindari kulit/gulai kental bila perlu) dan perkiraan kalorinya agar selaras dengan sisa kalori & fokus pengguna.
 3. Bila pertanyaan pengguna meminta rekomendasi makanan/menu pengganti untuk disantap, isi field suggestedMeal dengan hasSuggestion=true beserta estimasi Atwater-nya agar pengguna bisa langsung mencatatnya ke log harian dengan 1 klik. Jika pertanyaan hanya klarifikasi umum tanpa menu spesifik untuk dicatat, set hasSuggestion=false.
-4. Gunakan Bahasa Indonesia yang ramah, ringkas, dan mudah dibaca saat pengguna berada di tempat makan.`;
+4. Tulis reply secara SINGKAT, PADAT, dan PRAKTIS (maksimal 3–4 poin bullet pendek) agar cepat dibaca saat pengguna berada di depan etalase warteg atau restoran.`;
 
       const historyContents = (body.history || []).slice(-8).map((item) => ({
         role: item.role === "model" ? "model" : "user",
         parts: [{ text: item.text }],
       }));
 
+      const userParts: Array<
+        { text: string } | { inlineData: { mimeType: string; data: string } }
+      > = [];
+      if (imageBase64 && imageMimeType.startsWith("image/")) {
+        userParts.push({
+          inlineData: {
+            mimeType: imageMimeType,
+            data: imageBase64,
+          },
+        });
+      }
+      userParts.push({ text: message });
+
       const response = await withGeminiRetry(
         (signal) =>
           ai.models.generateContent({
-            model: "gemini-4-hydrogen",
+            model: "gemini-3.1-flash-lite",
             contents: [
               ...historyContents,
-              { role: "user", parts: [{ text: message }] },
+              { role: "user", parts: userParts },
             ],
             config: {
               abortSignal: signal,
-              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
               systemInstruction,
             responseMimeType: "application/json",
             responseSchema: {
@@ -1299,7 +1878,7 @@ Tugas Anda:
             },
           },
         }),
-        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
+        { attemptTimeoutMs: 32000, totalBudgetMs: 42000 }
       );
 
       const parsed = parseJsonSafely<{

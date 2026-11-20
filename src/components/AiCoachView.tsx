@@ -212,7 +212,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
               : undefined,
         },
         {
-          timeoutMs: 38000,
+          timeoutMs: 50000,
           fallbackError: "Pelatih AI tidak dapat merespons saat ini.",
         }
       );

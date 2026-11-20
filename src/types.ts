@@ -44,6 +44,8 @@ export type MenuBudgetStyle =
   | "praktis_seimbang"
   | "variasi_lengkap";
 
+export type MealPlanDuration = 7 | 14 | 30;
+
 export interface PlannedMealItem {
   mealType: MealType;
   foodName: string;
@@ -82,6 +84,7 @@ export interface WeeklyMealPlan {
   medicalNotesSnapshot?: string;
   targetCaloriesPerDay: number;
   weeklyAverageCalories?: number;
+  durationDays?: number;
   planTitle: string;
   nutritionistSummary: string;
   safetyReminder: string;
@@ -120,6 +123,7 @@ export interface FamilyWeeklyMealPlan {
   budgetStyle: MenuBudgetStyle;
   preferencesNote: string;
   memberIdsSnapshot: string[];
+  durationDays?: number;
   planTitle: string;
   nutritionistSummary: string;
   safetyReminder: string;
@@ -173,6 +177,13 @@ export interface NutritionPlan {
   childZScore?: number;
 }
 
+export interface DetectedFoodItem {
+  name: string;
+  portion: string;
+  calories: number;
+  protein: number;
+}
+
 export interface FoodLogEntry {
   id: string;
   date: string; // YYYY-MM-DD
@@ -187,8 +198,31 @@ export interface FoodLogEntry {
   assumptions?: string;
   calorieRange?: string;
   confidenceLevel?: "tinggi" | "sedang" | "perkiraan_kasar";
+  detectedItems?: DetectedFoodItem[];
   source: "ai" | "manual";
   createdAt: string;
+}
+
+export interface GroceryRecipeIdea {
+  title: string;
+  cookingTimeMinutes: number;
+  mealType: MealType;
+  portionNote: string;
+  calories: number;
+  carbs: number;
+  protein: number;
+  fat: number;
+  ingredientsUsed: string[];
+  extraPantryItems: string[];
+  cookingSteps: string[];
+  nutritionAdaptationNote: string;
+}
+
+export interface GroceryAnalysisResult {
+  summary: string;
+  detectedIngredients: string[];
+  storageTip: string;
+  recipes: GroceryRecipeIdea[];
 }
 
 export interface ExerciseLogEntry {
@@ -222,6 +256,7 @@ export interface ChatMessage {
   role: "user" | "model";
   text: string;
   timestamp: string;
+  hasPhoto?: boolean;
   suggestedMeal?: SuggestedMealReplacement;
 }
 

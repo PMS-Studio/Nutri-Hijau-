@@ -104,13 +104,23 @@ export function loadFamilyStore(): FamilyStore {
     const memberData: Record<string, MemberNutritionData> = {};
     normalizedMembers.forEach((m) => {
       const data = existingV2.memberData?.[m.id];
+      const normalizedCoachChats: Record<string, ChatMessage[]> = {};
+      if (data?.coachChats && typeof data.coachChats === "object") {
+        for (const [k, list] of Object.entries(data.coachChats)) {
+          if (Array.isArray(list)) {
+            normalizedCoachChats[k] = list.slice(-40);
+          }
+        }
+      }
       memberData[m.id] = {
         foodLogs: Array.isArray(data?.foodLogs) ? data.foodLogs : [],
         exerciseLogs: Array.isArray(data?.exerciseLogs) ? data.exerciseLogs : [],
         waterLogs: data?.waterLogs && typeof data.waterLogs === "object" ? data.waterLogs : {},
         weightLogs: Array.isArray(data?.weightLogs) ? data.weightLogs : [],
-        coachChats: data?.coachChats && typeof data.coachChats === "object" ? data.coachChats : {},
-        dailyConsultChats: Array.isArray(data?.dailyConsultChats) ? data.dailyConsultChats : [],
+        coachChats: normalizedCoachChats,
+        dailyConsultChats: Array.isArray(data?.dailyConsultChats)
+          ? data.dailyConsultChats.slice(-40)
+          : [],
         weeklyPlan: data?.weeklyPlan ?? null,
       };
     });

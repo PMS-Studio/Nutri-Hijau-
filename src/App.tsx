@@ -55,7 +55,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { id: "dashboard", label: "Dashboard Harian", icon: LayoutDashboard },
   { id: "food", label: "Catat Makanan", icon: UtensilsCrossed },
-  { id: "mealplan", label: "Menu 7 Hari", icon: CalendarDays },
+  { id: "mealplan", label: "Rencana Menu", icon: CalendarDays },
   { id: "coach", label: "Pelatih AI", icon: BotMessageSquare },
   { id: "profile", label: "Profil & Target", icon: SlidersHorizontal },
 ];
@@ -373,7 +373,7 @@ export default function App() {
         ...data,
         coachChats: {
           ...data.coachChats,
-          [catKey]: [...existing, ...newMsgs],
+          [catKey]: [...existing, ...newMsgs].slice(-40),
         },
       };
     });
@@ -394,7 +394,7 @@ export default function App() {
   const handleAppendConsultMessages = (newMsgs: ChatMessage[]) => {
     updateActiveMemberData((data) => ({
       ...data,
-      dailyConsultChats: [...(data.dailyConsultChats ?? []), ...newMsgs],
+      dailyConsultChats: [...(data.dailyConsultChats ?? []), ...newMsgs].slice(-40),
     }));
   };
 
@@ -481,10 +481,15 @@ export default function App() {
   const todayExercises = activeMemberData.exerciseLogs.filter((e) => e.date === todayKey);
   const todayCaloriesIn = todayFoods.reduce((sum, f) => sum + f.calories, 0);
   const todayCaloriesOut = todayExercises.reduce((sum, e) => sum + e.caloriesBurned, 0);
+  const includeExerciseInConsult =
+    activeMember.activityLevel === "sedentary" || activeMember.activityLevel === "light";
   const todaySummaryForConsult = {
     caloriesIn: todayCaloriesIn,
     caloriesOut: todayCaloriesOut,
-    remainingCalories: plan.dailyCalorieTarget - todayCaloriesIn,
+    remainingCalories:
+      plan.dailyCalorieTarget +
+      (includeExerciseInConsult ? todayCaloriesOut : 0) -
+      todayCaloriesIn,
     carbs: Math.round(todayFoods.reduce((sum, f) => sum + f.carbs, 0)),
     protein: Math.round(todayFoods.reduce((sum, f) => sum + f.protein, 0)),
     fat: Math.round(todayFoods.reduce((sum, f) => sum + f.fat, 0)),
@@ -850,7 +855,7 @@ export default function App() {
           }`}
         >
           <CalendarDays className="w-4 h-4" />
-          <span className="text-[10px] leading-none whitespace-nowrap">Menu 7H</span>
+          <span className="text-[10px] leading-none whitespace-nowrap">Menu</span>
         </button>
 
         {/* Center Quick Action Button -> Catat Makanan */}

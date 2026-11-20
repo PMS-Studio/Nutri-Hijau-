@@ -316,7 +316,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="h-11 px-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-white/80 dark:bg-[#0D241B]/80 hover:bg-white dark:hover:bg-[#123024] text-[#0F172A] dark:text-[#ECFDF5] text-sm font-medium transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
           >
             <CalendarDays className="w-4 h-4 text-[#10B981]" />
-            <span>Menu 7 Hari</span>
+            <span>Rencana Menu</span>
           </button>
         </div>
       </section>
