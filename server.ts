@@ -47,10 +47,25 @@ async function getGeminiClient() {
 
 function getFriendlyGeminiError(err: unknown): { status: number; message: string } {
   const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
   if (raw.includes("GEMINI_API_KEY")) {
     return {
       status: 500,
       message: "Kunci API Gemini belum dikonfigurasi. Silakan periksa panel Settings > Secrets.",
+    };
+  }
+  if (
+    raw.includes("GEMINI_TIMEOUT") ||
+    lower.includes("abort") ||
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("deadline_exceeded") ||
+    lower.includes("upstream")
+  ) {
+    return {
+      status: 504,
+      message:
+        "Layanan AI membutuhkan waktu terlalu lama untuk merespons. Silakan coba lagi atau ringkas permintaan Anda.",
     };
   }
   if (raw.includes("PERMISSION_DENIED") || raw.includes("API_KEY_INVALID") || raw.includes("403") || raw.includes("400")) {
@@ -65,30 +80,90 @@ function getFriendlyGeminiError(err: unknown): { status: number; message: string
       message: "Batas kuota permintaan AI sementara tercapai. Silakan coba lagi beberapa saat lagi.",
     };
   }
+  if (
+    raw.includes("UNAVAILABLE") ||
+    raw.includes("503") ||
+    lower.includes("high demand") ||
+    lower.includes("overloaded")
+  ) {
+    return {
+      status: 503,
+      message:
+        "Server AI sedang mengalami lonjakan permintaan sementara. Silakan tunggu beberapa detik lalu coba kirim ulang.",
+    };
+  }
   return {
     status: 500,
     message: "Gagal memproses permintaan AI saat ini. Silakan coba lagi.",
   };
 }
 
-async function withGeminiRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
+interface GeminiRetryOptions {
+  maxRetries?: number;
+  attemptTimeoutMs?: number;
+  totalBudgetMs?: number;
+}
+
+async function withGeminiRetry<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  options: GeminiRetryOptions = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 1;
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? 20000;
+  const totalBudgetMs = options.totalBudgetMs ?? 24000;
+  const startedAt = Date.now();
   let lastError: unknown;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const elapsed = Date.now() - startedAt;
+    const remainingBudget = totalBudgetMs - elapsed;
+    if (remainingBudget < 4000) {
+      throw new Error("GEMINI_TIMEOUT");
+    }
+
+    const thisTimeoutMs = Math.min(attemptTimeoutMs, remainingBudget);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      return await fn();
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("GEMINI_TIMEOUT"));
+        }, thisTimeoutMs);
+      });
+
+      return await Promise.race([fn(controller.signal), timeoutPromise]);
     } catch (err) {
       lastError = err;
       const raw = err instanceof Error ? err.message : String(err);
+      const lower = raw.toLowerCase();
+      const isTimeout =
+        raw.includes("GEMINI_TIMEOUT") ||
+        lower.includes("abort") ||
+        lower.includes("timeout");
       const isNonRetryable =
+        isTimeout ||
         raw.includes("GEMINI_API_KEY") ||
         raw.includes("PERMISSION_DENIED") ||
         raw.includes("API_KEY_INVALID") ||
         raw.includes("403") ||
         raw.includes("400");
-      if (isNonRetryable || attempt === maxRetries) {
+
+      const elapsedAfterError = Date.now() - startedAt;
+      if (
+        isNonRetryable ||
+        attempt === maxRetries ||
+        elapsedAfterError > totalBudgetMs * 0.45
+      ) {
         throw err;
       }
-      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+
+      await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   }
   throw lastError;
@@ -285,16 +360,18 @@ async function startServer() {
         ? `\nKondisi kesehatan/pantangan pengguna: ${body.medicalNotes.trim()}`
         : "";
 
-      const response = await withGeminiRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-4-hydrogen",
-          contents: `Perkirakan kandungan gizi dan kalori untuk makanan berikut:
+      const response = await withGeminiRetry(
+        (signal) =>
+          ai.models.generateContent({
+            model: "gemini-4-hydrogen",
+            contents: `Perkirakan kandungan gizi dan kalori untuk makanan berikut:
 Deskripsi makanan: "${description}"
 Waktu makan: ${mealType}
 Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" : ""}${medicalLine}`,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            systemInstruction:
+            config: {
+              abortSignal: signal,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              systemInstruction:
               "Anda adalah ahli gizi klinis Indonesia yang berpedoman pada TKPI (Tabel Komposisi Pangan Indonesia Kemenkes RI) dan USDA FoodData Central. Perkirakan kalori (kkal) serta makronutrisi (karbohidrat, protein, lemak dalam gram) secara akurat dan realistis untuk makanan Indonesia maupun internasional. Pastikan total kalori konsisten dengan prinsip Atwater (4×karbohidrat + 4×protein + 9×lemak). Sertakan asumsi berat/bahan agar transparan (misalnya minyak goreng, santan, ukuran potong), rentang variasi kalori yang wajar, dan tingkat keyakinan estimasi ('tinggi' jika ukuran/berat spesifik disebut jelas, 'sedang' untuk porsi rumah tangga standar, 'perkiraan_kasar' jika deskripsi sangat umum). Jika pengguna mencantumkan kondisi kesehatan, sesuaikan saran gizi singkat secara aman.",
             responseMimeType: "application/json",
           responseSchema: {
@@ -353,9 +430,11 @@ Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" :
               "confidenceLevel",
               "nutritionTip",
             ],
+            },
           },
-        },
-      }));
+        }),
+        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
+      );
 
       const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
 
@@ -402,7 +481,7 @@ Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" :
         return;
       }
 
-      const { ai } = await getGeminiClient();
+      const { ai, ThinkingLevel } = await getGeminiClient();
       const profile = body.profile || {};
       const today = body.todaySummary || {};
       const category = profile.category || "adult_female";
@@ -480,17 +559,21 @@ Aturan Akurasi & Keamanan:
         parts: [{ text: item.text }],
       }));
 
-      const response = await withGeminiRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-4-hydrogen",
-          contents: [
-            ...historyContents,
-            { role: "user", parts: [{ text: message }] },
-          ],
-          config: {
-            systemInstruction,
-          },
-        })
+      const response = await withGeminiRetry(
+        (signal) =>
+          ai.models.generateContent({
+            model: "gemini-4-hydrogen",
+            contents: [
+              ...historyContents,
+              { role: "user", parts: [{ text: message }] },
+            ],
+            config: {
+              abortSignal: signal,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              systemInstruction,
+            },
+          }),
+        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
       );
 
       const replyText = (response.text || "").trim();
@@ -550,8 +633,7 @@ Aturan Akurasi & Keamanan:
 
       const { ai, Type, ThinkingLevel } = await getGeminiClient();
 
-      const prompt = `Susunkan daftar menu diet lengkap selama 7 HARI (Senin sampai Minggu) sebagai Ahli Gizi Klinis Indonesia untuk klien berikut:
-- Nama: ${profile.name || "Pengguna"}
+      const baseProfileContext = `- Nama: ${profile.name || "Pengguna"}
 - Kategori Profil: ${categoryLabel}${profile.isBreastfeeding ? " (Sedang Menyusui)" : ""}
 - Usia: ${profile.age ?? 28} tahun | Berat saat ini: ${profile.currentWeight ?? 65} kg | Target berat: ${profile.targetWeight ?? 58} kg | Tinggi: ${profile.height ?? 160} cm
 - Status BMI: ${plan.bmi ?? "-"} (${plan.bmiCategory || "-"}, ${plan.bmiStandard || "WHO Asia-Pasifik"})
@@ -560,109 +642,141 @@ Aturan Akurasi & Keamanan:
 - Gaya Menu & Budget: ${budgetLabel}
 ${combinedPrefs ? `- Catatan Medis / Pantangan / Preferensi WAJIB DIPATUHI: ${combinedPrefs}` : "- Catatan Medis / Pantangan: Tidak ada pantangan khusus"}
 
-${clinicalGuardrail}
+${clinicalGuardrail}`;
 
-Ketentuan Struktur Menu:
-1. Buat tepat 7 hari berurutan dengan dayName: "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu".
-2. Setiap hari harus memiliki tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
-3. Variasikan lauk dan sayur antar hari agar tidak membosankan namun tetap realistis untuk meal prep seminggu.
-4. Cantumkan takaran porsi jelas (gramasi & URT Indonesia, misal: "120g nasi putih/merah + 100g ikan kembung pepes + 1 mangkuk tumis kangkung").
-5. Pastikan angka calories tiap menu konsisten dengan Atwater (4×carbs + 4×protein + 9×fat) dan jumlah 4 waktu makan mendekati ${targetCalories} kkal/hari.
-6. Sertakan daftar belanja mingguan yang terkelompok rapi untuk seluruh menu 7 hari tersebut.`;
+      const mealSchema = {
+        type: Type.OBJECT,
+        properties: {
+          mealType: {
+            type: Type.STRING,
+            description: "Persis salah satu dari: sarapan, makan_siang, makan_malam, camilan",
+          },
+          foodName: { type: Type.STRING },
+          portionNote: { type: Type.STRING },
+          calories: { type: Type.INTEGER },
+          carbs: { type: Type.NUMBER },
+          protein: { type: Type.NUMBER },
+          fat: { type: Type.NUMBER },
+          prepNote: { type: Type.STRING },
+        },
+        required: [
+          "mealType",
+          "foodName",
+          "portionNote",
+          "calories",
+          "carbs",
+          "protein",
+          "fat",
+          "prepNote",
+        ],
+      };
 
-      const response = await withGeminiRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-4-hydrogen",
-          contents: prompt,
-        config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          systemInstruction:
-            "Anda adalah ahli gizi klinis bersertifikat di Indonesia yang berpedoman pada TKPI Kemenkes RI, Pedoman Gizi Seimbang (Isi Piringku), dan prinsip Atwater. Hasilkan rencana menu 7 hari yang praktis, lezat, realistis dimasak/dibeli di Indonesia, akurat secara matematis, dan sepenuhnya aman bagi profil kesehatan pengguna.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              planTitle: {
-                type: Type.STRING,
-                description: "Judul ringkas rencana menu 7 hari dalam Bahasa Indonesia.",
-              },
-              nutritionistSummary: {
-                type: Type.STRING,
-                description: "Penjelasan ahli gizi 2-3 kalimat mengenai strategi menu ini sesuai tujuan diet pengguna.",
-              },
-              safetyReminder: {
-                type: Type.STRING,
-                description: "Pengingat keamanan, hidrasi, atau penyesuaian medis 1-2 kalimat.",
-              },
-              days: {
-                type: Type.ARRAY,
-                items: {
+      const daySchema = {
+        type: Type.OBJECT,
+        properties: {
+          dayNumber: { type: Type.INTEGER },
+          dayName: { type: Type.STRING },
+          dailyTheme: { type: Type.STRING },
+          dailyTip: { type: Type.STRING },
+          meals: {
+            type: Type.ARRAY,
+            items: mealSchema,
+          },
+        },
+        required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
+      };
+
+      const systemInstruction =
+        "Anda adalah ahli gizi klinis bersertifikat di Indonesia yang berpedoman pada TKPI Kemenkes RI, Pedoman Gizi Seimbang (Isi Piringku), dan prinsip Atwater. Hasilkan rencana menu yang praktis, lezat, realistis dimasak/dibeli di Indonesia, akurat secara matematis, dan sepenuhnya aman bagi profil kesehatan pengguna.";
+
+      const promptPart1 = `Susunkan menu diet HARI 1–4 (Senin, Selasa, Rabu, Kamis) untuk klien berikut:
+${baseProfileContext}
+
+Ketentuan:
+1. Buat tepat 4 hari berurutan: dayNumber 1..4 dengan dayName persis "Senin", "Selasa", "Rabu", "Kamis".
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
+4. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
+
+      const promptPart2 = `Susunkan menu diet HARI 5–7 (Jumat, Sabtu, Minggu) + daftar belanja mingguan lengkap (7 hari) untuk klien berikut:
+${baseProfileContext}
+
+Ketentuan:
+1. Buat tepat 3 hari berurutan: dayNumber 5..7 dengan dayName persis "Jumat", "Sabtu", "Minggu", dengan variasi lauk berbeda agar tidak membosankan.
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Cantumkan takaran porsi jelas (gramasi & URT Indonesia) dan calories konsisten Atwater (4×carbs + 4×protein + 9×fat) mendekati ${targetCalories} kkal/hari.
+4. Sertakan shoppingList mingguan terkelompok rapi (Protein, Sayur & Buah, Karbohidrat & Bumbu) untuk kebutuhan seminggu.
+5. Tulis portionNote, prepNote, dailyTheme, dan dailyTip secara ringkas & padat (1 kalimat pendek).`;
+
+      const [resPart1, resPart2] = await Promise.all([
+        withGeminiRetry(
+          (signal) =>
+            ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents: promptPart1,
+              config: {
+                abortSignal: signal,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                systemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: {
                   type: Type.OBJECT,
                   properties: {
-                    dayNumber: { type: Type.INTEGER },
-                    dayName: { type: Type.STRING },
-                    dailyTheme: { type: Type.STRING },
-                    dailyTip: { type: Type.STRING },
-                    meals: {
+                    planTitle: { type: Type.STRING },
+                    nutritionistSummary: { type: Type.STRING },
+                    safetyReminder: { type: Type.STRING },
+                    days: { type: Type.ARRAY, items: daySchema },
+                  },
+                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                },
+              },
+            }),
+          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 25000 }
+        ),
+        withGeminiRetry(
+          (signal) =>
+            ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents: promptPart2,
+              config: {
+                abortSignal: signal,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                systemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    days: { type: Type.ARRAY, items: daySchema },
+                    shoppingList: {
                       type: Type.ARRAY,
                       items: {
                         type: Type.OBJECT,
                         properties: {
-                          mealType: {
-                            type: Type.STRING,
-                            description: "Persis salah satu dari: sarapan, makan_siang, makan_malam, camilan",
-                          },
-                          foodName: { type: Type.STRING },
-                          portionNote: { type: Type.STRING },
-                          calories: { type: Type.INTEGER },
-                          carbs: { type: Type.NUMBER },
-                          protein: { type: Type.NUMBER },
-                          fat: { type: Type.NUMBER },
-                          prepNote: { type: Type.STRING },
+                          category: { type: Type.STRING },
+                          items: { type: Type.ARRAY, items: { type: Type.STRING } },
                         },
-                        required: [
-                          "mealType",
-                          "foodName",
-                          "portionNote",
-                          "calories",
-                          "carbs",
-                          "protein",
-                          "fat",
-                          "prepNote",
-                        ],
+                        required: ["category", "items"],
                       },
                     },
                   },
-                  required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
+                  required: ["days", "shoppingList"],
                 },
               },
-              shoppingList: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    category: { type: Type.STRING },
-                    items: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                  },
-                  required: ["category", "items"],
-                },
-              },
-            },
-            required: [
-              "planTitle",
-              "nutritionistSummary",
-              "safetyReminder",
-              "days",
-              "shoppingList",
-            ],
-          },
-        },
-      }));
+            }),
+          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 25000 }
+        ),
+      ]);
 
-      const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
+      const parsedPart1 = parseJsonSafely<Record<string, unknown>>(resPart1.text || "{}");
+      const parsedPart2 = parseJsonSafely<Record<string, unknown>>(resPart2.text || "{}");
+      const parsed: Record<string, unknown> = {
+        ...parsedPart1,
+        days: [
+          ...(Array.isArray(parsedPart1.days) ? parsedPart1.days.slice(0, 4) : []),
+          ...(Array.isArray(parsedPart2.days) ? parsedPart2.days.slice(0, 3) : []),
+        ],
+        shoppingList: parsedPart2.shoppingList,
+      };
 
       const dayNamesFallback = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
       const mealOrder = ["sarapan", "makan_siang", "makan_malam", "camilan"] as const;
@@ -808,115 +922,152 @@ Ketentuan Struktur Menu:
 
       const { ai, Type, ThinkingLevel } = await getGeminiClient();
 
-      const prompt = `Susunkan RENCANA MENU MASAK KELUARGA 7 HARI (Senin–Minggu) untuk "${familyName}" yang terdiri dari ${members.length} anggota keluarga berikut:
+      const familyContextBlock = `Keluarga "${familyName}" (${members.length} anggota):
 ${memberRosterText}
-
 Gaya Masakan & Anggaran: ${budgetLabel}
 ${preferencesNote ? `Preferensi / Pantangan Keluarga: ${preferencesNote}` : "Preferensi Tambahan: Masakan keluarga Indonesia praktis dan ramah untuk semua usia."}
 
-Tujuan Utama:
-Satu hidangan induk keluarga per waktu makan agar dapur praktis (tidak memasak 3–4 menu terpisah setiap hari), namun memiliki **panduan penyesuaian porsi & modifikasi ringan untuk masing-masing anggota keluarga** (misalnya: porsi nasi, jumlah lauk protein, tambahan kuah/sayur untuk ibu menyusui, potongan ramah anak/lansia, atau pengurangan sambal/garam).
+Tujuan: Satu hidangan induk keluarga per waktu makan agar dapur praktis, disertai panduan penyesuaian porsi & modifikasi ringan untuk masing-masing anggota.`;
 
-Ketentuan Wajib:
-1. Buat tepat 7 hari berurutan: "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu".
-2. Setiap hari harus memiliki tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
-3. Pada setiap waktu makan, isi array memberPortions dengan tepat ${members.length} entri—satu untuk setiap anggota keluarga di atas menggunakan memberId dan memberName yang persis sama.
-4. Pastikan perkiraan kalori (estimatedCalories) tiap anggota pada 4 waktu makan dalam sehari masuk akal dan selaras mendekati target kalori harian masing-masing anggota.
-5. Sertakan daftar belanja mingguan terkelompok (protein hewani, protein nabati, sayur & buah, bumbu & bahan pokok) dengan takaran gabungan untuk ${members.length} orang selama 7 hari.`;
-
-      const response = await withGeminiRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-4-hydrogen",
-          contents: prompt,
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            systemInstruction:
-              "Anda adalah ahli gizi keluarga bersertifikat di Indonesia (berpedoman pada TKPI Kemenkes RI & Pedoman Gizi Seimbang Isi Piringku). Anda merancang satu menu keluarga yang harmonis, lezat, mudah dimasak di rumah, sekaligus presisi dalam membagi takaran porsi per anggota keluarga (ibu menyusui, ayah, anak/remaja, hingga lansia).",
-            responseMimeType: "application/json",
-            responseSchema: {
+      const familyDaySchema = {
+        type: Type.OBJECT,
+        properties: {
+          dayNumber: { type: Type.INTEGER },
+          dayName: { type: Type.STRING },
+          dailyTheme: { type: Type.STRING },
+          dailyTip: { type: Type.STRING },
+          meals: {
+            type: Type.ARRAY,
+            items: {
               type: Type.OBJECT,
               properties: {
-                planTitle: { type: Type.STRING },
-                nutritionistSummary: { type: Type.STRING },
-                safetyReminder: { type: Type.STRING },
-                days: {
+                mealType: { type: Type.STRING },
+                dishName: { type: Type.STRING },
+                baseIngredientsNote: { type: Type.STRING },
+                prepNote: { type: Type.STRING },
+                memberPortions: {
                   type: Type.ARRAY,
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      dayNumber: { type: Type.INTEGER },
-                      dayName: { type: Type.STRING },
-                      dailyTheme: { type: Type.STRING },
-                      dailyTip: { type: Type.STRING },
-                      meals: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.OBJECT,
-                          properties: {
-                            mealType: { type: Type.STRING },
-                            dishName: { type: Type.STRING },
-                            baseIngredientsNote: { type: Type.STRING },
-                            prepNote: { type: Type.STRING },
-                            memberPortions: {
-                              type: Type.ARRAY,
-                              items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                  memberId: { type: Type.STRING },
-                                  memberName: { type: Type.STRING },
-                                  portionInstruction: { type: Type.STRING },
-                                  estimatedCalories: { type: Type.INTEGER },
-                                },
-                                required: [
-                                  "memberId",
-                                  "memberName",
-                                  "portionInstruction",
-                                  "estimatedCalories",
-                                ],
-                              },
-                            },
-                          },
-                          required: [
-                            "mealType",
-                            "dishName",
-                            "baseIngredientsNote",
-                            "prepNote",
-                            "memberPortions",
-                          ],
-                        },
-                      },
+                      memberId: { type: Type.STRING },
+                      memberName: { type: Type.STRING },
+                      portionInstruction: { type: Type.STRING },
+                      estimatedCalories: { type: Type.INTEGER },
                     },
-                    required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
-                  },
-                },
-                shoppingList: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      category: { type: Type.STRING },
-                      items: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                      },
-                    },
-                    required: ["category", "items"],
+                    required: [
+                      "memberId",
+                      "memberName",
+                      "portionInstruction",
+                      "estimatedCalories",
+                    ],
                   },
                 },
               },
               required: [
-                "planTitle",
-                "nutritionistSummary",
-                "safetyReminder",
-                "days",
-                "shoppingList",
+                "mealType",
+                "dishName",
+                "baseIngredientsNote",
+                "prepNote",
+                "memberPortions",
               ],
             },
           },
-        })
-      );
+        },
+        required: ["dayNumber", "dayName", "dailyTheme", "dailyTip", "meals"],
+      };
 
-      const parsed = parseJsonSafely<Record<string, unknown>>(response.text || "{}");
+      const familySystemInstruction =
+        "Anda adalah ahli gizi keluarga bersertifikat di Indonesia (berpedoman pada TKPI Kemenkes RI & Pedoman Gizi Seimbang Isi Piringku). Anda merancang satu menu keluarga yang harmonis, lezat, mudah dimasak di rumah, sekaligus presisi dalam membagi takaran porsi per anggota keluarga.";
+
+      const familyPromptPart1 = `Susunkan menu masak keluarga HARI 1–4 (Senin, Selasa, Rabu, Kamis) untuk:
+${familyContextBlock}
+
+Ketentuan:
+1. Buat tepat 4 hari: dayNumber 1..4 dengan dayName "Senin", "Selasa", "Rabu", "Kamis".
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
+4. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
+
+      const familyPromptPart2 = `Susunkan menu masak keluarga HARI 5–7 (Jumat, Sabtu, Minggu) + daftar belanja mingguan gabungan (7 hari) untuk:
+${familyContextBlock}
+
+Ketentuan:
+1. Buat tepat 3 hari: dayNumber 5..7 dengan dayName "Jumat", "Sabtu", "Minggu" (lauk bervariasi).
+2. Tiap hari tepat 4 waktu makan dengan mealType persis: "sarapan", "makan_siang", "makan_malam", "camilan".
+3. Di setiap waktu makan, isi memberPortions tepat ${members.length} entri menggunakan memberId & memberName persis sama.
+4. Sertakan shoppingList mingguan terkelompok (Protein Hewani, Protein Nabati, Sayur & Buah, Bumbu & Pokok) untuk ${members.length} orang selama 7 hari.
+5. Tulis baseIngredientsNote, prepNote, portionInstruction, dan dailyTip singkat & padat (maks 1 kalimat pendek).`;
+
+      const [resFamPart1, resFamPart2] = await Promise.all([
+        withGeminiRetry(
+          (signal) =>
+            ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents: familyPromptPart1,
+              config: {
+                abortSignal: signal,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                systemInstruction: familySystemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    planTitle: { type: Type.STRING },
+                    nutritionistSummary: { type: Type.STRING },
+                    safetyReminder: { type: Type.STRING },
+                    days: { type: Type.ARRAY, items: familyDaySchema },
+                  },
+                  required: ["planTitle", "nutritionistSummary", "safetyReminder", "days"],
+                },
+              },
+            }),
+          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 26000 }
+        ),
+        withGeminiRetry(
+          (signal) =>
+            ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents: familyPromptPart2,
+              config: {
+                abortSignal: signal,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                systemInstruction: familySystemInstruction,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    days: { type: Type.ARRAY, items: familyDaySchema },
+                    shoppingList: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          category: { type: Type.STRING },
+                          items: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        },
+                        required: ["category", "items"],
+                      },
+                    },
+                  },
+                  required: ["days", "shoppingList"],
+                },
+              },
+            }),
+          { maxRetries: 1, attemptTimeoutMs: 22000, totalBudgetMs: 26000 }
+        ),
+      ]);
+
+      const parsedFamPart1 = parseJsonSafely<Record<string, unknown>>(resFamPart1.text || "{}");
+      const parsedFamPart2 = parseJsonSafely<Record<string, unknown>>(resFamPart2.text || "{}");
+      const parsed: Record<string, unknown> = {
+        ...parsedFamPart1,
+        days: [
+          ...(Array.isArray(parsedFamPart1.days) ? parsedFamPart1.days.slice(0, 4) : []),
+          ...(Array.isArray(parsedFamPart2.days) ? parsedFamPart2.days.slice(0, 3) : []),
+        ],
+        shoppingList: parsedFamPart2.shoppingList,
+      };
       const dayNamesFallback = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
       const mealOrder = ["sarapan", "makan_siang", "makan_malam", "camilan"] as const;
       const validMealTypes = new Set<string>(mealOrder);
@@ -1091,16 +1242,18 @@ Tugas Anda:
         parts: [{ text: item.text }],
       }));
 
-      const response = await withGeminiRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-4-hydrogen",
-          contents: [
-            ...historyContents,
-            { role: "user", parts: [{ text: message }] },
-          ],
-          config: {
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            systemInstruction,
+      const response = await withGeminiRetry(
+        (signal) =>
+          ai.models.generateContent({
+            model: "gemini-4-hydrogen",
+            contents: [
+              ...historyContents,
+              { role: "user", parts: [{ text: message }] },
+            ],
+            config: {
+              abortSignal: signal,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              systemInstruction,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -1145,7 +1298,8 @@ Tugas Anda:
               required: ["reply", "hasSuggestion"],
             },
           },
-        })
+        }),
+        { attemptTimeoutMs: 20000, totalBudgetMs: 24000 }
       );
 
       const parsed = parseJsonSafely<{
@@ -1218,6 +1372,10 @@ Tugas Anda:
     }
   });
 
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "Endpoint API tidak ditemukan." });
+  });
+
   if (!isProduction) {
     let viteMiddleware: express.RequestHandler | null = null;
     let viteInitError: Error | null = null;
@@ -1262,9 +1420,38 @@ Tugas Anda:
     });
   }
 
-  app.listen(PORT, HOST, () => {
+  app.use(
+    (
+      err: unknown,
+      req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction
+    ) => {
+      if (res.headersSent) {
+        return;
+      }
+      if (req.path.startsWith("/api")) {
+        const isBadJson =
+          err instanceof SyntaxError &&
+          "body" in (err as unknown as Record<string, unknown>);
+        if (isBadJson) {
+          res.status(400).json({ error: "Format data permintaan (JSON) tidak valid." });
+          return;
+        }
+        const friendly = getFriendlyGeminiError(err);
+        res.status(friendly.status).json({ error: friendly.message });
+        return;
+      }
+      res.status(500).send("Terjadi kesalahan internal server.");
+    }
+  );
+
+  const server = app.listen(PORT, HOST, () => {
     console.log(`Nutri Hijau server listening on http://${HOST}:${PORT}`);
   });
+  server.requestTimeout = 55000;
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
 }
 
 startServer().catch((err) => {

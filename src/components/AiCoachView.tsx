@@ -21,6 +21,7 @@ import {
   getQuickPromptsForCategory,
   getTodayDateKey,
 } from "../utils/nutrition";
+import { postJsonApi } from "../utils/api";
 
 interface AiCoachViewProps {
   profile: UserProfile;
@@ -179,10 +180,9 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
     onAppendMessages([userMsg]);
 
     try {
-      const res = await fetch("/api/ai/coach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await postJsonApi<{ reply: string }>(
+        "/api/ai/coach",
+        {
           message: clean,
           history: messages.map((m) => ({ role: m.role, text: m.text })),
           profile: {
@@ -210,13 +210,12 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
                   })),
                 }
               : undefined,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Pelatih AI tidak dapat merespons saat ini.");
-      }
+        },
+        {
+          timeoutMs: 38000,
+          fallbackError: "Pelatih AI tidak dapat merespons saat ini.",
+        }
+      );
 
       const aiMsg: ChatMessage = {
         id: `m_${Date.now()}`,

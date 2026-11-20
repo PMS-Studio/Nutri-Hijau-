@@ -24,6 +24,7 @@ import type {
   WeeklyMealPlan,
 } from "../types";
 import { getTodayDateKey } from "../utils/nutrition";
+import { postJsonApi } from "../utils/api";
 
 type VenueType = "warteg" | "restoran" | "kantin_katering" | "umum";
 
@@ -151,10 +152,12 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
     scrollToBottom();
 
     try {
-      const res = await fetch("/api/ai/menu-consult", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await postJsonApi<{
+        reply: string;
+        suggestedMeal?: SuggestedMealReplacement;
+      }>(
+        "/api/ai/menu-consult",
+        {
           message: trimmed,
           history: [...messages, userMsg]
             .slice(-8)
@@ -189,13 +192,12 @@ export const DailyMenuChatbot: React.FC<DailyMenuChatbotProps> = ({
               calories: f.calories,
             })),
           },
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Gagal menghubungi asisten menu harian.");
-      }
+        },
+        {
+          timeoutMs: 38000,
+          fallbackError: "Gagal menghubungi asisten menu harian.",
+        }
+      );
 
       const aiMsg: ChatMessage = {
         id: `mc_m_${Date.now()}`,

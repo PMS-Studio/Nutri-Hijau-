@@ -24,6 +24,7 @@ import {
   formatDateIndo,
   getTodayDateKey,
 } from "../utils/nutrition";
+import { postJsonApi } from "../utils/api";
 
 interface FoodLoggerViewProps {
   profile: UserProfile;
@@ -126,22 +127,31 @@ export const FoodLoggerView: React.FC<FoodLoggerViewProps> = ({
       const mealLabel =
         MEAL_OPTIONS.find((m) => m.id === mealType)?.label ?? "Makanan";
 
-      const res = await fetch("/api/ai/estimate-food", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await postJsonApi<{
+        foodName: string;
+        portionNote: string;
+        calories: number;
+        carbs: number;
+        protein: number;
+        fat: number;
+        assumptions?: string;
+        calorieRange?: string;
+        confidenceLevel?: "tinggi" | "sedang" | "perkiraan_kasar";
+        nutritionTip?: string;
+      }>(
+        "/api/ai/estimate-food",
+        {
           description: trimmed,
           mealType: mealLabel,
           userCategory: profile.category,
           isBreastfeeding: profile.isBreastfeeding,
           medicalNotes: profile.medicalNotes,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Gagal menghitung estimasi gizi dengan AI.");
-      }
+        },
+        {
+          timeoutMs: 35000,
+          fallbackError: "Gagal menghitung estimasi gizi dengan AI.",
+        }
+      );
 
       setPendingReceipt({
         date: selectedDate,

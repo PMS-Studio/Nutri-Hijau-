@@ -38,6 +38,7 @@ import {
   getTodayDateKey,
 } from "../utils/nutrition";
 import { DailyMenuChatbot } from "./DailyMenuChatbot";
+import { postJsonApi } from "../utils/api";
 
 interface MealPlanViewProps {
   profile: UserProfile;
@@ -324,24 +325,22 @@ export const MealPlanView: React.FC<MealPlanViewProps> = ({
     setIsGenerating(true);
 
     try {
-      const res = await fetch("/api/ai/weekly-meal-plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await postJsonApi<WeeklyMealPlan>(
+        "/api/ai/weekly-meal-plan",
+        {
           dietGoal,
           budgetStyle,
           preferencesNote,
           profile,
           nutritionPlan: plan,
-        }),
-      });
+        },
+        {
+          timeoutMs: 60000,
+          fallbackError: "Gagal menyusun menu 7 hari saat ini.",
+        }
+      );
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Gagal menyusun menu 7 hari saat ini.");
-      }
-
-      onSaveWeeklyPlan(data as WeeklyMealPlan);
+      onSaveWeeklyPlan(data);
       setSelectedDayIndex(0);
       setViewMode("daily");
     } catch (err) {
@@ -363,23 +362,21 @@ export const MealPlanView: React.FC<MealPlanViewProps> = ({
     setIsGeneratingFamily(true);
 
     try {
-      const res = await fetch("/api/ai/family-meal-plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await postJsonApi<FamilyWeeklyMealPlan>(
+        "/api/ai/family-meal-plan",
+        {
           familyName,
           budgetStyle: familyBudget,
           preferencesNote: familyPrefs,
           members: familySummaries,
-        }),
-      });
+        },
+        {
+          timeoutMs: 60000,
+          fallbackError: "Gagal menyusun menu keluarga 7 hari.",
+        }
+      );
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Gagal menyusun menu keluarga 7 hari.");
-      }
-
-      onSaveFamilyWeeklyPlan(data as FamilyWeeklyMealPlan);
+      onSaveFamilyWeeklyPlan(data);
       setFamilyDayIndex(0);
       setFamilyViewMode("daily");
     } catch (err) {
