@@ -615,9 +615,12 @@ export const ProfileSetup: React.FC<ProfileSetupProps> = ({
               <div className="flex items-center gap-3">
                 <BrandMark size="md" />
                 <div>
-                  <span className="text-xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5] whitespace-nowrap">
+                  <div className="text-lg sm:text-xl font-bold tracking-wide text-[#0F172A] dark:text-[#ECFDF5] whitespace-nowrap leading-tight">
                     {BRAND_NAME}
-                  </span>
+                  </div>
+                  <div className="text-xs font-medium text-[#10B981] dark:text-[#34D399] leading-tight">
+                    {BRAND_TAGLINE}
+                  </div>
                 </div>
               </div>
 

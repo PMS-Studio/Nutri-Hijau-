@@ -445,7 +445,7 @@ Profil pengguna: ${categoryLabel}${body.isBreastfeeding ? " (Sedang menyusui)" :
       const focusLabel =
         FOCUS_LABELS[profile.nutritionFocus || ""] || "Gizi Seimbang";
 
-      const systemInstruction = `Anda adalah Ahli Gizi & Pelatih Kesehatan Keluarga Nutri Hijau ("Hidup Sehat, Tumbuh Seimbang.") yang berbicara dalam Bahasa Indonesia yang hangat, akurat, terstruktur, dan berbasis bukti ilmiah (merujuk pedoman Kemenkes RI / AKG / WHO).
+      const systemInstruction = `Anda adalah Ahli Gizi & Pelatih Kesehatan Keluarga Nutri Hijau ~ Personal & Family Nutrition Intelligence (Nutrition • Wellness • Healthy Lifestyle) yang berbicara dalam Bahasa Indonesia yang hangat, akurat, terstruktur, dan berbasis bukti ilmiah (merujuk pedoman Kemenkes RI / AKG / WHO).
 
 Profil Anggota Keluarga Aktif:
 - Nama: ${profile.name || "Pengguna"} (${profile.relationRole || "Anggota Keluarga"})

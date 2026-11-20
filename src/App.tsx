@@ -517,10 +517,10 @@ export default function App() {
             <div className="flex items-center gap-2.5">
               <BrandMark size="md" />
               <div className="min-w-0">
-                <div className="text-lg font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5] whitespace-nowrap leading-tight">
+                <div className="text-base font-bold tracking-wide text-[#0F172A] dark:text-[#ECFDF5] whitespace-nowrap leading-tight">
                   {BRAND_NAME}
                 </div>
-                <div className="text-[11px] font-medium text-[#10B981] dark:text-[#34D399] leading-tight">
+                <div className="text-[10.5px] font-medium text-[#10B981] dark:text-[#34D399] leading-snug">
                   {BRAND_TAGLINE}
                 </div>
               </div>
@@ -812,7 +812,7 @@ export default function App() {
               <span className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
                 {BRAND_NAME}
               </span>
-              <span aria-hidden="true">—</span>
+              <span aria-hidden="true">~</span>
               <span className="text-emerald-700 dark:text-emerald-300 font-medium">
                 {BRAND_TAGLINE}
               </span>

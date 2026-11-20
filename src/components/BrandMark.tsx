@@ -1,7 +1,7 @@
 import React from "react";
 
 export const BRAND_NAME = "Nutri Hijau";
-export const BRAND_TAGLINE = "Hidup Sehat, Tumbuh Seimbang.";
+export const BRAND_TAGLINE = "Personal & Family Nutrition Intelligence";
 export const BRAND_PILLARS = "Nutrition • Wellness • Healthy Lifestyle";
 
 interface BrandMarkProps {
